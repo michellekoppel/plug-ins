@@ -2,6 +2,7 @@
   "name": "zipcode-lasso-map",
   "version": "0.1.0",
   "private": true,
+  "homepage": "https://michellekoppel.github.io/plug-ins/zipcode-lasso-map",
   "dependencies": {
     "@sigmacomputing/plugin": "^1.0.5",
     "@testing-library/jest-dom": "^5.17.0",
@@ -14,11 +15,16 @@
     "react-scripts": "5.0.1",
     "web-vitals": "^2.1.4"
   },
+  "devDependencies": {
+    "gh-pages": "^6.3.0"
+  },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d build -b gh-pages -e zipcode-lasso-map"
   },
   "eslintConfig": {
     "extends": [
