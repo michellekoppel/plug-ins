@@ -28,6 +28,13 @@ function colorForName(name) {
   return COLOR_PALETTE[Math.abs(hash) % COLOR_PALETTE.length];
 }
 
+// Roughly centers and frames the continental US. Used as the fixed map view
+// so the map doesn't re-center/re-zoom to fit whatever subset of data (e.g.
+// after a lasso selection filters the source) happens to be loaded.
+const DEFAULT_MAP_CENTER_LAT = 39.8283;
+const DEFAULT_MAP_CENTER_LON = -98.5795;
+const DEFAULT_MAP_ZOOM = 3.3;
+
 client.config.configureEditorPanel([
   { type: "element", name: "source" },
   { type: "column", name: "zipcode", source: "source", allowMultiple: false },
@@ -38,6 +45,9 @@ client.config.configureEditorPanel([
   { name: "Variables", type: 'group' },
   { name: 'ShowLegend', source: "Variables", type: "toggle", defaultValue: true },
   { name: 'MapStyle', source: "Variables", type: 'text', defaultValue: "light" },
+  { name: 'MapCenterLat', source: "Variables", type: 'text', defaultValue: String(DEFAULT_MAP_CENTER_LAT) },
+  { name: 'MapCenterLon', source: "Variables", type: 'text', defaultValue: String(DEFAULT_MAP_CENTER_LON) },
+  { name: 'MapZoom', source: "Variables", type: 'text', defaultValue: String(DEFAULT_MAP_ZOOM) },
   { name: 'MapboxAccessToken', type: 'text', secure: true },
 ]);
 
@@ -109,16 +119,15 @@ function App() {
         };
       });
 
-      const centerLat = lat.reduce((a, b) => a + b, 0) / lat.length;
-      const centerLon = lon.reduce((a, b) => a + b, 0) / lon.length;
+      // Fixed map view (defaults to framing the continental US) so the map
+      // doesn't jump to fit whatever subset of data is currently loaded.
+      const parsedCenterLat = parseFloat(config.MapCenterLat);
+      const parsedCenterLon = parseFloat(config.MapCenterLon);
+      const parsedZoom = parseFloat(config.MapZoom);
 
-      const maxLatDiff = Math.max(...lat) - Math.min(...lat);
-      const maxLonDiff = Math.max(...lon) - Math.min(...lon);
-
-      const latZoom = Math.log2(360 / maxLatDiff);
-      const lonZoom = Math.log2(180 / maxLonDiff);
-
-      const zoom = Math.min(latZoom, lonZoom);
+      const centerLat = Number.isFinite(parsedCenterLat) ? parsedCenterLat : DEFAULT_MAP_CENTER_LAT;
+      const centerLon = Number.isFinite(parsedCenterLon) ? parsedCenterLon : DEFAULT_MAP_CENTER_LON;
+      const zoom = Number.isFinite(parsedZoom) ? parsedZoom : DEFAULT_MAP_ZOOM;
 
       // Check if MapStyle is valid, if not, use the default value
       const validMapStyles = ['light', 'dark', 'streets', 'outdoors', 'satellite', 'satellite-streets'];
