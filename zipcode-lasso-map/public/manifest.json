@@ -1,0 +1,9 @@
+{
+  "short_name": "Zip Code Lasso Map",
+  "name": "Zip Code Lasso Map - Sigma Custom Plugin",
+  "icons": [],
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#000000",
+  "background_color": "#ffffff"
+}
