@@ -8,6 +8,26 @@ import {
   useVariable,
 } from "@sigmacomputing/plugin";
 
+// Plotly's default qualitative palette, reused here so we can assign colors
+// ourselves instead of letting Plotly cycle them by trace order.
+const COLOR_PALETTE = [
+  '#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
+  '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52'
+];
+
+// Deterministic string -> palette index, so a given legend value (e.g. a
+// region name) always gets the same color no matter what order the query
+// results come back in or which other values are present.
+function colorForName(name) {
+  const str = String(name);
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash << 5) - hash + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return COLOR_PALETTE[Math.abs(hash) % COLOR_PALETTE.length];
+}
+
 client.config.configureEditorPanel([
   { type: "element", name: "source" },
   { type: "column", name: "zipcode", source: "source", allowMultiple: false },
@@ -61,7 +81,9 @@ function App() {
         names = Array.from({ length: zip.length }, () => null);
       }
 
-      const uniqueNames = Array.from(new Set(names));
+      const uniqueNames = Array.from(new Set(names)).sort((a, b) =>
+        String(a).localeCompare(String(b))
+      );
 
       const plotData = uniqueNames.map(uniqueName => {
         const indices = names.reduce((acc, val, index) => {
@@ -82,7 +104,8 @@ function App() {
           lon: longitudesForName,
           customdata: zipsForName,
           text: zipsForName,
-          hovertemplate: '%{text}<extra></extra>'
+          hovertemplate: '%{text}<extra></extra>',
+          marker: uniqueName !== null ? { color: colorForName(uniqueName) } : undefined
         };
       });
 
