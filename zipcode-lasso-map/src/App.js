@@ -8,17 +8,18 @@ import {
   useVariable,
 } from "@sigmacomputing/plugin";
 
-// Bright, cheerful categorical palette (violet, amber, sky blue, coral,
-// blue, green, magenta, mint). Validated with the data-viz skill's palette
-// validator: passes lightness band, chroma floor, colorblind-safe
-// separation, and contrast on an adjacent-pair basis. With this many hues
-// on a map, some pairs of territories can still land close in color if
-// they happen to appear together (no qualitative set this size clears
-// every possible pairing at once) -- the legend and per-zip hover tooltip
-// are the backstop for that.
+// Bright, cheerful 14-color categorical palette (petrol, magenta, coral,
+// teal, gold, violet, orange, sky blue, brick, purple, green, blue, pink,
+// tan), sized for up to ~14 distinct territories. Validated with the
+// data-viz skill's palette validator: passes lightness band, chroma floor,
+// colorblind-safe separation, and contrast on an adjacent-pair basis. With
+// this many hues on a map, some pairs of territories can still land close
+// in color if they happen to appear together (no qualitative set this size
+// clears every possible pairing at once) -- the legend and per-zip hover
+// tooltip are the backstop for that.
 const COLOR_PALETTE = [
-  '#8A5FD9', '#D98A2E', '#2A9FC4', '#E8654F',
-  '#4A80D9', '#3FAE6E', '#C15A9E', '#2FB88F'
+  '#1E85AC', '#C7519E', '#E85A3A', '#2FB79A', '#D9A62E', '#8A5FD9', '#E08830',
+  '#2A9FC4', '#A8342E', '#A84FC7', '#4CAF50', '#3E6FD9', '#E8709E', '#A67A2E'
 ];
 
 function hashIndex(name, modulus) {
