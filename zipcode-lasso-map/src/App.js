@@ -64,6 +64,22 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+// Zip codes come from Sigma in whatever format the source column happens to
+// use -- a number (dropping a leading zero, e.g. "01001" -> 1001), a
+// ZIP+4 like "89701-1234", or with stray whitespace. Normalizing to a plain
+// 5-digit string before matching against the bundled dataset (which is
+// keyed by clean 5-digit strings) means those don't silently fail to match
+// and vanish from the map. The *filter* variable written back to Sigma
+// still uses each row's original, unmodified zip value, so it keeps
+// matching whatever format the user's own data uses elsewhere.
+function normalizeZip(rawZip) {
+  if (rawZip === null || rawZip === undefined) {
+    return null;
+  }
+  const digits = String(rawZip).trim().match(/^\d+/);
+  return digits ? digits[0].padStart(5, '0').slice(0, 5) : null;
+}
+
 // Roughly centers and frames the continental US. Used as the fixed map view
 // so the map doesn't re-center/re-zoom to fit whatever subset of data (e.g.
 // after a lasso selection filters the source) happens to be loaded.
@@ -196,10 +212,12 @@ function App() {
         return;
       }
 
+      const normalizedZip = zip.map(normalizeZip);
+
       // Group row indices by territory, keeping only zips we have shapes for.
       const indicesByTerritory = new Map();
       zip.forEach((z, index) => {
-        if (!zctaByZip.has(z)) {
+        if (!zctaByZip.has(normalizedZip[index])) {
           return;
         }
         const t = territory[index];
@@ -223,7 +241,7 @@ function App() {
         const lats = [];
 
         indicesByTerritory.get(t).forEach(index => {
-          const rings = ringsForZip(zctaByZip.get(zip[index]));
+          const rings = ringsForZip(zctaByZip.get(normalizedZip[index]));
           rings.forEach(ring => {
             if (lons.length) {
               lons.push(null);
@@ -266,7 +284,7 @@ function App() {
       const dotLabels = [];
 
       zip.forEach((z, index) => {
-        const entry = zctaByZip.get(z);
+        const entry = zctaByZip.get(normalizedZip[index]);
         if (!entry) return;
         dotLons.push(entry.lon);
         dotLats.push(entry.lat);
