@@ -16,7 +16,7 @@ const COLOR_PALETTE = [
 ];
 
 // Deterministic string -> palette index, so a given legend value (e.g. a
-// region name) always gets the same color no matter what order the query
+// territory name) always gets the same color no matter what order the query
 // results come back in or which other values are present.
 function colorForName(name) {
   const str = String(name);
@@ -28,6 +28,13 @@ function colorForName(name) {
   return COLOR_PALETTE[Math.abs(hash) % COLOR_PALETTE.length];
 }
 
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 // Roughly centers and frames the continental US. Used as the fixed map view
 // so the map doesn't re-center/re-zoom to fit whatever subset of data (e.g.
 // after a lasso selection filters the source) happens to be loaded.
@@ -35,12 +42,30 @@ const DEFAULT_MAP_CENTER_LAT = 39.8283;
 const DEFAULT_MAP_CENTER_LON = -98.5795;
 const DEFAULT_MAP_ZOOM = 3.3;
 
+// Zip code (ZCTA) boundary + centroid lookup, bundled with the plugin so
+// Sigma only needs to supply a zip code and a territory per row -- no
+// latitude/longitude columns required. Derived from Census TIGER ZCTA
+// boundaries (public domain), simplified via
+// https://github.com/ndrezn/zip-code-geojson.
+const ZCTA_DATA_URL = `${process.env.PUBLIC_URL}/data/zcta.json`;
+
+// Only the outer ring of each polygon is used (holes are ignored) -- at this
+// simplification level ZCTA shapes essentially never have meaningful holes.
+function outerRings(geometry) {
+  if (!geometry) return [];
+  if (geometry.type === 'Polygon') {
+    return [geometry.coordinates[0]];
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return geometry.coordinates.map(polygon => polygon[0]);
+  }
+  return [];
+}
+
 client.config.configureEditorPanel([
   { type: "element", name: "source" },
   { type: "column", name: "zipcode", source: "source", allowMultiple: false },
-  { type: "column", name: "latitude", source: "source", allowMultiple: false },
-  { type: "column", name: "longitude", source: "source", allowMultiple: false },
-  { type: "column", name: "legend", source: "source", allowMultiple: false },
+  { type: "column", name: "territory", source: "source", allowMultiple: false },
   { type: "variable", name: "filterZipcode" },
   { name: "Variables", type: 'group' },
   { name: 'ShowLegend', source: "Variables", type: "toggle", defaultValue: true },
@@ -57,6 +82,36 @@ function App() {
   const sigmaData = useElementData(config.source);
   const [filterZipcode, setFilterZipcode] = useVariable(config.filterZipcode);
   const [prevSigmaData, setPrevSigmaData] = useState(null);
+  const [zctaByZip, setZctaByZip] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetch(ZCTA_DATA_URL)
+      .then(res => res.json())
+      .then(geojson => {
+        if (cancelled) return;
+
+        const byZip = new Map();
+        geojson.features.forEach(feature => {
+          const { zip, lat, lon } = feature.properties;
+          byZip.set(zip, {
+            rings: outerRings(feature.geometry),
+            lat,
+            lon
+          });
+        });
+
+        setZctaByZip(byZip);
+      })
+      .catch(err => {
+        console.error('Failed to load zip code boundary data', err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const updatePlotSize = () => {
@@ -73,51 +128,107 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (sigmaData && JSON.stringify(sigmaData) !== JSON.stringify(prevSigmaData)) {
+    if (
+      zctaByZip &&
+      sigmaData &&
+      JSON.stringify(sigmaData) !== JSON.stringify(prevSigmaData)
+    ) {
       setPrevSigmaData(sigmaData);
 
       const graphDiv = document.getElementById('myDiv');
 
-      let names = config.legend ? sigmaData[config.legend] : null;
       const zip = sigmaData[config.zipcode];
-      const lat = sigmaData[config.latitude];
-      const lon = sigmaData[config.longitude];
+      const territory = sigmaData[config.territory];
 
-      if (!zip || !lat || !lon) {
+      if (!zip || !territory) {
         return;
       }
 
-      if (!names) {
-        names = Array.from({ length: zip.length }, () => null);
-      }
+      // Group row indices by territory, keeping only zips we have shapes for.
+      const indicesByTerritory = new Map();
+      zip.forEach((z, index) => {
+        if (!zctaByZip.has(z)) {
+          return;
+        }
+        const t = territory[index];
+        if (!indicesByTerritory.has(t)) {
+          indicesByTerritory.set(t, []);
+        }
+        indicesByTerritory.get(t).push(index);
+      });
 
-      const uniqueNames = Array.from(new Set(names)).sort((a, b) =>
+      const sortedTerritories = Array.from(indicesByTerritory.keys()).sort((a, b) =>
         String(a).localeCompare(String(b))
       );
 
-      const plotData = uniqueNames.map(uniqueName => {
-        const indices = names.reduce((acc, val, index) => {
-          if (val === uniqueName) {
-            acc.push(index);
-          }
-          return acc;
-        }, []);
+      // One filled trace per territory: concatenate every zip's outer ring
+      // into a single scattermapbox trace, separated by null breaks so
+      // Plotly draws each zip as its own closed shape within the trace.
+      const fillTraces = sortedTerritories.map(t => {
+        const color = colorForName(t);
+        const lons = [];
+        const lats = [];
 
-        const zipsForName = indices.map(i => zip[i]);
-        const latitudesForName = indices.map(i => lat[i]);
-        const longitudesForName = indices.map(i => lon[i]);
+        indicesByTerritory.get(t).forEach(index => {
+          const { rings } = zctaByZip.get(zip[index]);
+          rings.forEach(ring => {
+            if (lons.length) {
+              lons.push(null);
+              lats.push(null);
+            }
+            ring.forEach(([lon, lat]) => {
+              lons.push(lon);
+              lats.push(lat);
+            });
+          });
+        });
 
         return {
           type: 'scattermapbox',
-          name: uniqueName,
-          lat: latitudesForName,
-          lon: longitudesForName,
-          customdata: zipsForName,
-          text: zipsForName,
-          hovertemplate: '%{text}<extra></extra>',
-          marker: uniqueName !== null ? { color: colorForName(uniqueName) } : undefined
+          mode: 'lines',
+          name: t,
+          lon: lons,
+          lat: lats,
+          fill: 'toself',
+          fillcolor: hexToRgba(color, 0.55),
+          line: { color, width: 1 },
+          hoverinfo: 'skip',
+          showlegend: true
         };
       });
+
+      // Single trace of centroid dots across all zips -- this is what
+      // actually receives lasso/box selection (Plotly doesn't support
+      // lasso-selecting filled map shapes), colored to match each zip's
+      // territory fill.
+      const dotLons = [];
+      const dotLats = [];
+      const dotColors = [];
+      const dotZips = [];
+
+      zip.forEach((z, index) => {
+        const entry = zctaByZip.get(z);
+        if (!entry) return;
+        dotLons.push(entry.lon);
+        dotLats.push(entry.lat);
+        dotColors.push(colorForName(territory[index]));
+        dotZips.push(z);
+      });
+
+      const dotTrace = {
+        type: 'scattermapbox',
+        mode: 'markers',
+        name: 'Zip codes',
+        lon: dotLons,
+        lat: dotLats,
+        marker: { size: 4, color: dotColors },
+        customdata: dotZips,
+        text: dotZips,
+        hovertemplate: '%{text}<extra></extra>',
+        showlegend: false
+      };
+
+      const plotData = [...fillTraces, dotTrace];
 
       // Fixed map view (defaults to framing the continental US) so the map
       // doesn't jump to fit whatever subset of data is currently loaded.
@@ -171,7 +282,9 @@ function App() {
 
       graphDiv.on('plotly_selected', function (eventData) {
         const selectedZipcodes = eventData && eventData.points
-          ? eventData.points.map(pt => pt.customdata)
+          ? eventData.points
+            .map(pt => pt.customdata)
+            .filter(z => z !== undefined && z !== null)
           : [];
 
         const uniqueSelectedZipcodes = Array.from(new Set(selectedZipcodes));
@@ -187,7 +300,7 @@ function App() {
         setFilterZipcode(null);
       });
     }
-  }, [sigmaData, config, filterZipcode, prevSigmaData, mapboxAccessToken, setFilterZipcode]);
+  }, [sigmaData, config, filterZipcode, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip]);
 
   return (
     <div id='myDiv'></div>
