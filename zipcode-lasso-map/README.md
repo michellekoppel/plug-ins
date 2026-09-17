@@ -34,14 +34,29 @@ a table, `IN` condition on a control, etc).
 
 ### Zip code boundary data
 
-`public/data/zcta.json` is a ~9 MB bundled dataset of every US Zip Code
-Tabulation Area (ZCTA): a simplified boundary polygon plus a centroid for
-each. It's derived from US Census TIGER/Line data (public domain), via the
-simplified export at
-[ndrezn/zip-code-geojson](https://github.com/ndrezn/zip-code-geojson). The
-plugin fetches it once per session (not bundled into the JS itself) and
-looks up rows from your Sigma data against it by 5-digit zip code. Zip codes
-not found in this dataset (e.g. non-US zips) are silently skipped.
+`public/data/zcta.json` is an ~18 MB bundled dataset of US Zip Code
+Tabulation Areas (ZCTAs): a boundary polygon plus a centroid for each. It's
+generated from the Census Bureau's
+[2020 cartographic boundary file](https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_zcta520_500k.zip)
+(`cb_2020_us_zcta520_500k`, public domain), simplified with
+[mapshaper](https://github.com/mbloch/mapshaper) using shared-topology
+simplification (`visvalingam keep-shapes 8%`) so adjacent zip shapes keep
+matching edges instead of drifting apart into gaps, the way simplifying each
+shape independently would. The plugin fetches it once per session (not
+bundled into the JS itself) and looks up rows from your Sigma data against
+it by 5-digit zip code (zip values are normalized first — a numeric column,
+a ZIP+4 suffix, or stray whitespace won't break the match).
+
+Zip codes with no entry in this dataset are skipped and counted in a
+"N zip codes not shown" note in the bottom-right corner of the map, mirroring
+Sigma's native region map. This happens for non-US zips, and for the (fairly
+small) set of US zip codes with no residential land area — ZCTAs are built
+from populated census blocks, so unpopulated land (e.g. federal/BLM land)
+isn't part of any ZCTA at all. That's a limitation of ZCTA-based data in
+general, not something a bigger or better-simplified file can fix; getting
+literally gap-free nationwide coverage (as Sigma's built-in region map does)
+would require a licensed commercial zip-boundary dataset, which isn't
+available through a public Mapbox access token.
 
 ## Configuration
 

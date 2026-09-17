@@ -215,9 +215,15 @@ function App() {
       const normalizedZip = zip.map(normalizeZip);
 
       // Group row indices by territory, keeping only zips we have shapes for.
+      // Zip codes with no entry in the bundled dataset (e.g. non-US zips, or
+      // US zip codes with no residential land area, which Census excludes
+      // from ZCTAs entirely) are counted so we can show a "not shown" note,
+      // the same way Sigma's own region map surfaces unmapped rows.
       const indicesByTerritory = new Map();
+      let unmappedCount = 0;
       zip.forEach((z, index) => {
         if (!zctaByZip.has(normalizedZip[index])) {
+          unmappedCount++;
           return;
         }
         const t = territory[index];
@@ -352,7 +358,19 @@ function App() {
           bgcolor: 'rgba(0,0,0,0.5)',
           font: { color: 'white' },
           visible: config.ShowLegend
-        }
+        },
+        annotations: unmappedCount > 0 ? [{
+          text: `${unmappedCount} zip code${unmappedCount === 1 ? '' : 's'} not shown`,
+          showarrow: false,
+          xref: 'paper',
+          yref: 'paper',
+          x: 0.99,
+          y: 0.02,
+          xanchor: 'right',
+          yanchor: 'bottom',
+          font: { size: 11, color: '#ccc' },
+          bgcolor: 'rgba(0,0,0,0.5)'
+        }] : []
       };
 
       Plotly.setPlotConfig({ mapboxAccessToken: mapboxAccessToken });
