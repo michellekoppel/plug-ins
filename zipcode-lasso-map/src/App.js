@@ -8,8 +8,8 @@ import {
   useVariable,
 } from "@sigmacomputing/plugin";
 
-// Muted categorical palette (blue, rose, steel cyan, tan, teal, terracotta,
-// purple, olive, navy, green). Validated with the data-viz skill's palette
+// Bright, cheerful categorical palette (violet, amber, sky blue, coral,
+// blue, green, magenta, mint). Validated with the data-viz skill's palette
 // validator: passes lightness band, chroma floor, colorblind-safe
 // separation, and contrast on an adjacent-pair basis. With this many hues
 // on a map, some pairs of territories can still land close in color if
@@ -17,21 +17,43 @@ import {
 // every possible pairing at once) -- the legend and per-zip hover tooltip
 // are the backstop for that.
 const COLOR_PALETTE = [
-  '#3D74B0', '#B94F6B', '#1E93AE', '#C9963D', '#1F9C89',
-  '#C05A3A', '#7A5FA0', '#8B9B3D', '#25659A', '#4F9350'
+  '#8A5FD9', '#D98A2E', '#2A9FC4', '#E8654F',
+  '#4A80D9', '#3FAE6E', '#C15A9E', '#2FB88F'
 ];
 
-// Deterministic string -> palette index, so a given legend value (e.g. a
-// territory name) always gets the same color no matter what order the query
-// results come back in or which other values are present.
-function colorForName(name) {
+function hashIndex(name, modulus) {
   const str = String(name);
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     hash = (hash << 5) - hash + str.charCodeAt(i);
     hash |= 0;
   }
-  return COLOR_PALETTE[Math.abs(hash) % COLOR_PALETTE.length];
+  return Math.abs(hash) % modulus;
+}
+
+// Assigns each name a palette color, hashed so a given name normally lands
+// on the same color across refreshes. If two names hash to the same slot,
+// the alphabetically-first one keeps it and the other is bumped to the next
+// free slot -- so as long as there are no more distinct names than palette
+// colors, every name currently on screen gets a distinct color, not just a
+// probably-distinct one.
+function assignColors(names) {
+  const sorted = [...names].sort((a, b) => String(a).localeCompare(String(b)));
+  const used = new Set();
+  const colorByName = new Map();
+
+  sorted.forEach(name => {
+    let index = hashIndex(name, COLOR_PALETTE.length);
+    let attempts = 0;
+    while (used.has(index) && attempts < COLOR_PALETTE.length) {
+      index = (index + 1) % COLOR_PALETTE.length;
+      attempts++;
+    }
+    used.add(index);
+    colorByName.set(name, COLOR_PALETTE[index]);
+  });
+
+  return colorByName;
 }
 
 function hexToRgba(hex, alpha) {
@@ -166,12 +188,13 @@ function App() {
       const sortedTerritories = Array.from(indicesByTerritory.keys()).sort((a, b) =>
         String(a).localeCompare(String(b))
       );
+      const colorByTerritory = assignColors(sortedTerritories);
 
       // One filled trace per territory: concatenate every zip's outer ring
       // into a single scattermapbox trace, separated by null breaks so
       // Plotly draws each zip as its own closed shape within the trace.
       const fillTraces = sortedTerritories.map(t => {
-        const color = colorForName(t);
+        const color = colorByTerritory.get(t);
         const lons = [];
         const lats = [];
 
@@ -196,8 +219,8 @@ function App() {
           lon: lons,
           lat: lats,
           fill: 'toself',
-          fillcolor: hexToRgba(color, 0.6),
-          line: { color, width: 1 },
+          fillcolor: hexToRgba(color, 0.35),
+          line: { color, width: 1.25 },
           hoverinfo: 'skip',
           showlegend: true
         };
@@ -218,7 +241,7 @@ function App() {
         if (!entry) return;
         dotLons.push(entry.lon);
         dotLats.push(entry.lat);
-        dotColors.push(colorForName(territory[index]));
+        dotColors.push(colorByTerritory.get(territory[index]));
         dotZips.push(z);
         dotLabels.push(`${z} — ${territory[index]}`);
       });
