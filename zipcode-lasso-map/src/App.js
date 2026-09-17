@@ -91,6 +91,29 @@ function outerRings(geometry) {
   return [];
 }
 
+// About 9% of ZCTAs in the bundled dataset have a centroid but no boundary
+// polygon (e.g. PO-box-only zip codes with no land area). Without this,
+// those zips would render as an invisible gap in an otherwise filled
+// territory even though they're valid rows in the source data. Draw a small
+// square centered on the centroid instead, so there's at least a visible
+// patch of color rather than an unexplained hole.
+const FALLBACK_SHAPE_RADIUS_DEG = 0.045;
+
+function ringsForZip(entry) {
+  if (entry.rings.length) {
+    return entry.rings;
+  }
+  const { lat, lon } = entry;
+  const r = FALLBACK_SHAPE_RADIUS_DEG;
+  return [[
+    [lon - r, lat - r],
+    [lon - r, lat + r],
+    [lon + r, lat + r],
+    [lon + r, lat - r],
+    [lon - r, lat - r]
+  ]];
+}
+
 client.config.configureEditorPanel([
   { type: "element", name: "source" },
   { type: "column", name: "zipcode", source: "source", allowMultiple: false },
@@ -200,7 +223,7 @@ function App() {
         const lats = [];
 
         indicesByTerritory.get(t).forEach(index => {
-          const { rings } = zctaByZip.get(zip[index]);
+          const rings = ringsForZip(zctaByZip.get(zip[index]));
           rings.forEach(ring => {
             if (lons.length) {
               lons.push(null);
