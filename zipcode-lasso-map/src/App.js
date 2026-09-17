@@ -8,11 +8,17 @@ import {
   useVariable,
 } from "@sigmacomputing/plugin";
 
-// Plotly's default qualitative palette, reused here so we can assign colors
-// ourselves instead of letting Plotly cycle them by trace order.
+// Muted categorical palette (blue, rose, steel cyan, tan, teal, terracotta,
+// purple, olive, navy, green). Validated with the data-viz skill's palette
+// validator: passes lightness band, chroma floor, colorblind-safe
+// separation, and contrast on an adjacent-pair basis. With this many hues
+// on a map, some pairs of territories can still land close in color if
+// they happen to appear together (no qualitative set this size clears
+// every possible pairing at once) -- the legend and per-zip hover tooltip
+// are the backstop for that.
 const COLOR_PALETTE = [
-  '#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
-  '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52'
+  '#3D74B0', '#B94F6B', '#1E93AE', '#C9963D', '#1F9C89',
+  '#C05A3A', '#7A5FA0', '#8B9B3D', '#25659A', '#4F9350'
 ];
 
 // Deterministic string -> palette index, so a given legend value (e.g. a
@@ -190,7 +196,7 @@ function App() {
           lon: lons,
           lat: lats,
           fill: 'toself',
-          fillcolor: hexToRgba(color, 0.55),
+          fillcolor: hexToRgba(color, 0.6),
           line: { color, width: 1 },
           hoverinfo: 'skip',
           showlegend: true
@@ -205,6 +211,7 @@ function App() {
       const dotLats = [];
       const dotColors = [];
       const dotZips = [];
+      const dotLabels = [];
 
       zip.forEach((z, index) => {
         const entry = zctaByZip.get(z);
@@ -213,6 +220,7 @@ function App() {
         dotLats.push(entry.lat);
         dotColors.push(colorForName(territory[index]));
         dotZips.push(z);
+        dotLabels.push(`${z} — ${territory[index]}`);
       });
 
       const dotTrace = {
@@ -223,7 +231,7 @@ function App() {
         lat: dotLats,
         marker: { size: 4, color: dotColors },
         customdata: dotZips,
-        text: dotZips,
+        text: dotLabels,
         hovertemplate: '%{text}<extra></extra>',
         showlegend: false
       };
