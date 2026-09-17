@@ -97,7 +97,7 @@ function outerRings(geometry) {
 // territory even though they're valid rows in the source data. Draw a small
 // square centered on the centroid instead, so there's at least a visible
 // patch of color rather than an unexplained hole.
-const FALLBACK_SHAPE_RADIUS_DEG = 0.045;
+const FALLBACK_SHAPE_RADIUS_DEG = 0.025;
 
 function ringsForZip(entry) {
   if (entry.rings.length) {
@@ -244,7 +244,12 @@ function App() {
           lat: lats,
           fill: 'toself',
           fillcolor: hexToRgba(color, 0.35),
-          line: { color, width: 1.25 },
+          // Line color is also translucent, not solid -- with many small
+          // zip shapes (especially the small fallback squares) drawn edge
+          // to edge, opaque borders add up into what reads as a much less
+          // transparent map overall, even though the fill itself hasn't
+          // changed.
+          line: { color: hexToRgba(color, 0.7), width: 1 },
           hoverinfo: 'skip',
           showlegend: true
         };
