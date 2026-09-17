@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist';
 import './App.css';
 import {
   client,
   useConfig,
+  useElementColumns,
   useElementData,
   useVariable,
 } from "@sigmacomputing/plugin";
@@ -134,6 +135,7 @@ client.config.configureEditorPanel([
   { type: "element", name: "source" },
   { type: "column", name: "zipcode", source: "source", allowMultiple: false },
   { type: "column", name: "territory", source: "source", allowMultiple: false },
+  { type: "column", name: "tooltipFields", source: "source", allowMultiple: true },
   { type: "variable", name: "filterZipcode" },
   { name: "Variables", type: 'group' },
   { name: 'ShowLegend', source: "Variables", type: "toggle", defaultValue: true },
@@ -148,8 +150,10 @@ function App() {
   const config = useConfig();
   const mapboxAccessToken = config.MapboxAccessToken;
   const sigmaData = useElementData(config.source);
+  const columns = useElementColumns(config.source);
   const [filterZipcode, setFilterZipcode] = useVariable(config.filterZipcode);
   const [prevSigmaData, setPrevSigmaData] = useState(null);
+  const prevColumnsRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
 
   useEffect(() => {
@@ -199,9 +203,11 @@ function App() {
     if (
       zctaByZip &&
       sigmaData &&
-      JSON.stringify(sigmaData) !== JSON.stringify(prevSigmaData)
+      (JSON.stringify(sigmaData) !== JSON.stringify(prevSigmaData) ||
+        columns !== prevColumnsRef.current)
     ) {
       setPrevSigmaData(sigmaData);
+      prevColumnsRef.current = columns;
 
       const graphDiv = document.getElementById('myDiv');
 
@@ -241,6 +247,8 @@ function App() {
       // One filled trace per territory: concatenate every zip's outer ring
       // into a single scattermapbox trace, separated by null breaks so
       // Plotly draws each zip as its own closed shape within the trace.
+      const tooltipFieldIds = Array.isArray(config.tooltipFields) ? config.tooltipFields : [];
+
       const fillTraces = sortedTerritories.map(t => {
         const color = colorByTerritory.get(t);
         const lons = [];
@@ -260,6 +268,21 @@ function App() {
           });
         });
 
+        // Tooltip fields are treated as per-territory attributes (e.g. a
+        // rep name or quota that's the same for every zip in the
+        // territory) -- shows the first non-empty value found rather than
+        // aggregating across the territory's rows.
+        const firstIndex = indicesByTerritory.get(t)[0];
+        const tooltipLines = [`<b>${t}</b>`];
+        tooltipFieldIds.forEach(fieldId => {
+          const columnValues = sigmaData[fieldId];
+          if (!columnValues) return;
+          const value = columnValues[firstIndex];
+          if (value === null || value === undefined || value === '') return;
+          const label = (columns[fieldId] && columns[fieldId].name) || fieldId;
+          tooltipLines.push(`${label}: ${value}`);
+        });
+
         return {
           type: 'scattermapbox',
           mode: 'lines',
@@ -274,7 +297,8 @@ function App() {
           // transparent map overall, even though the fill itself hasn't
           // changed.
           line: { color: hexToRgba(color, 0.7), width: 1 },
-          hoverinfo: 'skip',
+          text: tooltipLines.join('<br>'),
+          hoverinfo: 'text',
           showlegend: true
         };
       });
@@ -396,7 +420,7 @@ function App() {
         setFilterZipcode(null);
       });
     }
-  }, [sigmaData, config, filterZipcode, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip]);
+  }, [sigmaData, config, filterZipcode, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
 
   return (
     <div id='myDiv'></div>

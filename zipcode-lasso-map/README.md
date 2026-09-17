@@ -67,6 +67,7 @@ When you add this plugin to a Sigma workbook, the editor panel exposes:
 | `source` | Element | The Sigma element supplying the data to plot. |
 | `zipcode` | Column | The 5-digit zip code for each row. |
 | `territory` | Column | The value used to color each zip's shape and dot (e.g. sales territory, region). |
+| `tooltipFields` | Column (multiple) | Extra columns to show when hovering over a territory's shape (e.g. rep name, quota). Treated as per-territory attributes — shows the first non-empty value found among that territory's rows, not an aggregate across all its zips. |
 | `filterZipcode` | Control variable | The variable the plugin writes selected zip codes to, comma-separated. |
 | `ShowLegend` | Toggle | Show/hide the map legend. Default: on. |
 | `MapStyle` | Text | One of `light`, `dark`, `streets`, `outdoors`, `satellite`, `satellite-streets`. Default: `light`. |
