@@ -137,6 +137,7 @@ client.config.configureEditorPanel([
   { type: "column", name: "territory", source: "source", allowMultiple: false },
   { type: "column", name: "tooltipFields", source: "source", allowMultiple: true },
   { type: "variable", name: "filterZipcode" },
+  { type: "variable", name: "unmatchedZipcodes" },
   { name: "Variables", type: 'group' },
   { name: 'ShowLegend', source: "Variables", type: "toggle", defaultValue: true },
   { name: 'MapStyle', source: "Variables", type: 'text', defaultValue: "light" },
@@ -157,6 +158,7 @@ function App() {
   const [sigmaData, loadMoreData, dataInfo] = useIncrementalElementData(config.source);
   const columns = useElementColumns(config.source);
   const [filterZipcode, setFilterZipcode] = useVariable(config.filterZipcode);
+  const [, setUnmatchedZipcodes] = useVariable(config.unmatchedZipcodes);
   const [prevSigmaData, setPrevSigmaData] = useState(null);
   const prevColumnsRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
@@ -239,10 +241,10 @@ function App() {
       // from ZCTAs entirely) are counted so we can show a "not shown" note,
       // the same way Sigma's own region map surfaces unmapped rows.
       const indicesByTerritory = new Map();
-      let unmappedCount = 0;
+      const unmatchedRaw = [];
       zip.forEach((z, index) => {
         if (!zctaByZip.has(normalizedZip[index])) {
-          unmappedCount++;
+          unmatchedRaw.push(z);
           return;
         }
         const t = territory[index];
@@ -251,6 +253,22 @@ function App() {
         }
         indicesByTerritory.get(t).push(index);
       });
+      const unmappedCount = unmatchedRaw.length;
+
+      if (unmappedCount > 0) {
+        // Surfaced two ways for debugging: the console for whoever has dev
+        // tools open, and a Sigma variable so it can be shown in the
+        // workbook itself (e.g. bound to a text/table element) without
+        // needing dev tools at all.
+        const uniqueUnmatched = Array.from(new Set(unmatchedRaw));
+        console.warn(
+          `Zip Code Lasso Map: ${unmappedCount} row(s) (${uniqueUnmatched.length} distinct zip value(s)) did not match the boundary dataset. First 20:`,
+          uniqueUnmatched.slice(0, 20)
+        );
+        setUnmatchedZipcodes(uniqueUnmatched.slice(0, 200).join(','));
+      } else {
+        setUnmatchedZipcodes(null);
+      }
 
       const sortedTerritories = Array.from(indicesByTerritory.keys()).sort((a, b) =>
         String(a).localeCompare(String(b))
@@ -433,7 +451,7 @@ function App() {
         setFilterZipcode(null);
       });
     }
-  }, [sigmaData, config, filterZipcode, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
+  }, [sigmaData, config, filterZipcode, prevSigmaData, mapboxAccessToken, setFilterZipcode, setUnmatchedZipcodes, zctaByZip, columns]);
 
   return (
     <div id='myDiv'></div>
