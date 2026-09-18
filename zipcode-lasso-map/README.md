@@ -34,29 +34,44 @@ a table, `IN` condition on a control, etc).
 
 ### Zip code boundary data
 
-`public/data/zcta.json` is an ~18 MB bundled dataset of US Zip Code
-Tabulation Areas (ZCTAs): a boundary polygon plus a centroid for each. It's
-generated from the Census Bureau's
-[2020 cartographic boundary file](https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_zcta520_500k.zip)
-(`cb_2020_us_zcta520_500k`, public domain), simplified with
-[mapshaper](https://github.com/mbloch/mapshaper) using shared-topology
-simplification (`visvalingam keep-shapes 8%`) so adjacent zip shapes keep
-matching edges instead of drifting apart into gaps, the way simplifying each
-shape independently would. The plugin fetches it once per session (not
-bundled into the JS itself) and looks up rows from your Sigma data against
-it by 5-digit zip code (zip values are normalized first — a numeric column,
-a ZIP+4 suffix, or stray whitespace won't break the match).
+`public/data/zcta.json` is an ~19 MB bundled dataset built from two sources
+layered together:
 
-Zip codes with no entry in this dataset are skipped and counted in a
+1. **Boundary shapes**, for ~33,800 US Zip Code Tabulation Areas (ZCTAs), from
+   the Census Bureau's
+   [2020 cartographic boundary file](https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_zcta520_500k.zip)
+   (`cb_2020_us_zcta520_500k`, public domain), simplified with
+   [mapshaper](https://github.com/mbloch/mapshaper) using shared-topology
+   simplification (`visvalingam keep-shapes 8%`) so adjacent zip shapes keep
+   matching edges instead of drifting apart into gaps, the way simplifying
+   each shape independently would.
+2. **Centroid-only fallback points**, for ~7,800 additional US zip codes that
+   are real, valid USPS zip codes but have no ZCTA at all — ZCTAs are built
+   from populated census blocks, so a zip code assigned to a single
+   organization, PO box, or military base (e.g. `59402`, Malmstrom AFB, MT)
+   commonly has no residential census block behind it and gets no ZCTA,
+   not just no shape. These come from
+   [GeoNames' US postal code data](https://download.geonames.org/export/zip/)
+   (CC BY 4.0), which covers the full set of ~41,500 USPS zip codes with at
+   least a point location.
+
+The plugin fetches this once per session (not bundled into the JS itself)
+and looks up rows from your Sigma data against it by 5-digit zip code (zip
+values are normalized first — a numeric column, a ZIP+4 suffix, or stray
+whitespace won't break the match). A zip with no boundary polygon (from
+either source above) renders as a small square at its centroid instead of a
+full shape, so it's still visible on the map even without a real outline.
+
+Zip codes with no entry in this dataset at all are skipped and counted in a
 "N zip codes not shown" note in the bottom-right corner of the map, mirroring
-Sigma's native region map. This happens for non-US zips, and for the (fairly
-small) set of US zip codes with no residential land area — ZCTAs are built
-from populated census blocks, so unpopulated land (e.g. federal/BLM land)
-isn't part of any ZCTA at all. That's a limitation of ZCTA-based data in
-general, not something a bigger or better-simplified file can fix; getting
-literally gap-free nationwide coverage (as Sigma's built-in region map does)
-would require a licensed commercial zip-boundary dataset, which isn't
-available through a public Mapbox access token.
+Sigma's native region map. At this point that should only happen for non-US
+zips or genuinely unpopulated land with no zip code assigned to it (e.g.
+much of rural Nevada's federal/BLM land) — not something a bigger or
+better dataset can fix, since there's no zip code to draw there. Getting
+literally gap-free nationwide coverage over that unpopulated land (as
+Sigma's built-in region map does) would require a licensed commercial
+zip-boundary dataset, which isn't available through a public Mapbox access
+token.
 
 ## Configuration
 
