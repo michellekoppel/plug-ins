@@ -137,7 +137,6 @@ client.config.configureEditorPanel([
   { type: "column", name: "territory", source: "source", allowMultiple: false },
   { type: "column", name: "tooltipFields", source: "source", allowMultiple: true },
   { type: "variable", name: "filterZipcode" },
-  { type: "variable", name: "unmatchedZipcodes" },
   { name: "Variables", type: 'group' },
   { name: 'ShowLegend', source: "Variables", type: "toggle", defaultValue: true },
   { name: 'MapStyle', source: "Variables", type: 'text', defaultValue: "light" },
@@ -158,7 +157,6 @@ function App() {
   const [sigmaData, loadMoreData, dataInfo] = useIncrementalElementData(config.source);
   const columns = useElementColumns(config.source);
   const [filterZipcode, setFilterZipcode] = useVariable(config.filterZipcode);
-  const [, setUnmatchedZipcodes] = useVariable(config.unmatchedZipcodes);
   const [prevSigmaData, setPrevSigmaData] = useState(null);
   const prevColumnsRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
@@ -174,7 +172,12 @@ function App() {
   useEffect(() => {
     let cancelled = false;
 
-    fetch(ZCTA_DATA_URL)
+    // no-store: this file has changed several times during development and
+    // an iframe-embedded plugin can end up pinned to a stale cached copy
+    // (browser or Sigma's own resource cache) longer than the server's
+    // Cache-Control max-age would suggest -- bypass HTTP caching entirely
+    // rather than rely on revalidation.
+    fetch(ZCTA_DATA_URL, { cache: 'no-store' })
       .then(res => res.json())
       .then(geojson => {
         if (cancelled) return;
@@ -262,18 +265,11 @@ function App() {
       const unmappedCount = unmatchedRaw.length;
 
       if (unmappedCount > 0) {
-        // Surfaced two ways for debugging: the console for whoever has dev
-        // tools open, and a Sigma variable so it can be shown in the
-        // workbook itself (e.g. bound to a text/table element) without
-        // needing dev tools at all.
         const uniqueUnmatched = Array.from(new Set(unmatchedRaw));
         console.warn(
           `Zip Code Lasso Map: ${unmappedCount} row(s) (${uniqueUnmatched.length} distinct zip value(s)) did not match the boundary dataset. First 20:`,
           uniqueUnmatched.slice(0, 20)
         );
-        setUnmatchedZipcodes(uniqueUnmatched.slice(0, 200).join(','));
-      } else {
-        setUnmatchedZipcodes(null);
       }
 
       const sortedTerritories = Array.from(indicesByTerritory.keys()).sort((a, b) =>
@@ -457,7 +453,7 @@ function App() {
         setFilterZipcode(null);
       });
     }
-  }, [sigmaData, config, filterZipcode, prevSigmaData, mapboxAccessToken, setFilterZipcode, setUnmatchedZipcodes, zctaByZip, columns]);
+  }, [sigmaData, config, filterZipcode, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
 
   return (
     <div id='myDiv'></div>
