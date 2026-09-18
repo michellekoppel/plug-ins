@@ -5,7 +5,7 @@ import {
   client,
   useConfig,
   useElementColumns,
-  useElementData,
+  useIncrementalElementData,
   useVariable,
 } from "@sigmacomputing/plugin";
 
@@ -149,12 +149,25 @@ client.config.configureEditorPanel([
 function App() {
   const config = useConfig();
   const mapboxAccessToken = config.MapboxAccessToken;
-  const sigmaData = useElementData(config.source);
+  // useElementData caps out at 25,000 rows and silently truncates anything
+  // past that -- a "one row per US zip code" source can run close to or
+  // past 33,000 rows, so useIncrementalElementData (no row cap, fetched in
+  // chunks via loadMoreData) is used instead to make sure every row makes
+  // it to the plugin.
+  const [sigmaData, loadMoreData, dataInfo] = useIncrementalElementData(config.source);
   const columns = useElementColumns(config.source);
   const [filterZipcode, setFilterZipcode] = useVariable(config.filterZipcode);
   const [prevSigmaData, setPrevSigmaData] = useState(null);
   const prevColumnsRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
+
+  // Keep requesting the next chunk until the host reports every row has
+  // been delivered.
+  useEffect(() => {
+    if (config.source && !dataInfo.isComplete) {
+      loadMoreData();
+    }
+  }, [config.source, dataInfo.isComplete, dataInfo.rowCount, loadMoreData]);
 
   useEffect(() => {
     let cancelled = false;
