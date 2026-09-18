@@ -215,14 +215,20 @@ function App() {
   }, []);
 
   useEffect(() => {
+    // Compared by content (JSON.stringify), not object identity: the SDK
+    // can hand back a new sigmaData/columns object on every internal update
+    // even when nothing actually changed, and gating on reference equality
+    // instead would re-run the full Plotly.newPlot redraw on every one of
+    // those ticks -- visible as the whole map flashing/rebuilding in a loop.
+    const columnsKey = JSON.stringify(columns);
     if (
       zctaByZip &&
       sigmaData &&
       (JSON.stringify(sigmaData) !== JSON.stringify(prevSigmaData) ||
-        columns !== prevColumnsRef.current)
+        columnsKey !== prevColumnsRef.current)
     ) {
       setPrevSigmaData(sigmaData);
-      prevColumnsRef.current = columns;
+      prevColumnsRef.current = columnsKey;
 
       const graphDiv = document.getElementById('myDiv');
 
