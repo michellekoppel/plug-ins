@@ -58,13 +58,6 @@ function assignColors(names) {
   return colorByName;
 }
 
-function hexToRgba(hex, alpha) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
 function formatNumber(n) {
   if (!Number.isFinite(n)) return '0';
   return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -371,33 +364,12 @@ function App() {
 
       const tooltipFieldIds = Array.isArray(config.tooltipFields) ? config.tooltipFields : [];
 
-      // One filled trace per territory: concatenate every zip's outer ring
-      // into a single scattermapbox trace, separated by null breaks so
-      // Plotly draws each zip as its own closed shape within the trace.
-      const fillTraces = sortedTerritories.map(t => {
-        const color = colorByTerritory.get(t);
-        const lons = [];
-        const lats = [];
+      // Per-territory tooltip text (first non-empty tooltipFields value
+      // found among that territory's rows) -- shared by every zip shape
+      // in the territory.
+      const tooltipTextByTerritory = new Map();
+      sortedTerritories.forEach(t => {
         const zipsInTerritory = zipsByTerritory.get(t);
-
-        zipsInTerritory.forEach(normZip => {
-          const rings = ringsForZip(zctaByZip.get(normZip));
-          rings.forEach(ring => {
-            if (lons.length) {
-              lons.push(null);
-              lats.push(null);
-            }
-            ring.forEach(([lon, lat]) => {
-              lons.push(lon);
-              lats.push(lat);
-            });
-          });
-        });
-
-        // Tooltip fields are treated as per-territory attributes (e.g. a
-        // rep name or quota that's the same for every zip in the
-        // territory) -- shows the first non-empty value found rather than
-        // aggregating across the territory's rows.
         const firstIndex = zipAgg.get(zipsInTerritory[0]).firstIndex;
         const tooltipLines = [`<b>${t}</b>`];
         tooltipFieldIds.forEach(fieldId => {
@@ -408,26 +380,75 @@ function App() {
           const label = (columns[fieldId] && columns[fieldId].name) || fieldId;
           tooltipLines.push(`${label}: ${value}`);
         });
-
-        return {
-          type: 'scattermapbox',
-          mode: 'lines',
-          name: t,
-          lon: lons,
-          lat: lats,
-          fill: 'toself',
-          fillcolor: hexToRgba(color, 0.35),
-          // Line color is also translucent, not solid -- with many small
-          // zip shapes (especially the small fallback squares) drawn edge
-          // to edge, opaque borders add up into what reads as a much less
-          // transparent map overall, even though the fill itself hasn't
-          // changed.
-          line: { color: hexToRgba(color, 0.7), width: 1 },
-          text: tooltipLines.join('<br>'),
-          hoverinfo: 'text',
-          showlegend: true
-        };
+        tooltipTextByTerritory.set(t, tooltipLines.join('<br>'));
       });
+
+      // Territory shapes are drawn as a single choroplethmapbox trace
+      // rather than one scattermapbox fill-to-self trace per territory.
+      // Plotly's mapbox engine hardcodes its layer stacking order --
+      // choroplethmapbox always below densitymapbox always below
+      // scattermapbox, regardless of trace array order -- so this is the
+      // only way to get the heat map to render on top of the territory
+      // coloring instead of underneath it.
+      const territoryIndex = new Map(sortedTerritories.map((t, i) => [t, i]));
+      const territoryCount = sortedTerritories.length;
+
+      const choroplethFeatures = [];
+      const choroplethLocations = [];
+      const choroplethZ = [];
+      const choroplethText = [];
+
+      zipAgg.forEach((agg, normZip) => {
+        const rings = ringsForZip(zctaByZip.get(normZip));
+        choroplethFeatures.push({
+          type: 'Feature',
+          id: normZip,
+          geometry: { type: 'MultiPolygon', coordinates: rings.map(ring => [ring]) }
+        });
+        choroplethLocations.push(normZip);
+        // +0.5 lands each zip solidly inside its territory's color band
+        // rather than exactly on the boundary between two bands.
+        choroplethZ.push(territoryIndex.get(agg.territory) + 0.5);
+        choroplethText.push(tooltipTextByTerritory.get(agg.territory));
+      });
+
+      // A flat, stepped colorscale so each territory's index band renders
+      // as that territory's exact assigned color, not a gradient.
+      const territoryColorscale = [];
+      sortedTerritories.forEach((t, i) => {
+        const color = colorByTerritory.get(t);
+        territoryColorscale.push([i / territoryCount, color]);
+        territoryColorscale.push([(i + 1) / territoryCount, color]);
+      });
+
+      const choroplethTrace = territoryCount > 0 ? {
+        type: 'choroplethmapbox',
+        geojson: { type: 'FeatureCollection', features: choroplethFeatures },
+        locations: choroplethLocations,
+        z: choroplethZ,
+        zmin: 0,
+        zmax: territoryCount,
+        colorscale: territoryColorscale,
+        showscale: false,
+        marker: { opacity: 0.4, line: { color: 'rgba(255,255,255,0.6)', width: 0.5 } },
+        text: choroplethText,
+        hoverinfo: 'text',
+        showlegend: false
+      } : null;
+
+      // Dummy invisible point traces purely to give each territory its
+      // own legend swatch -- choroplethmapbox only supports a single
+      // continuous colorscale legend, not one per category.
+      const legendTraces = sortedTerritories.map(t => ({
+        type: 'scattermapbox',
+        mode: 'markers',
+        lon: [DEFAULT_MAP_CENTER_LON],
+        lat: [DEFAULT_MAP_CENTER_LAT],
+        marker: { size: 8, color: colorByTerritory.get(t), opacity: 0 },
+        name: t,
+        showlegend: true,
+        hoverinfo: 'skip'
+      }));
 
       // Single trace of centroid dots across all zips -- this is what
       // actually receives lasso/box selection (Plotly doesn't support
@@ -515,7 +536,12 @@ function App() {
         }
       }
 
-      const plotData = [...fillTraces, dotTrace, ...(heatmapTrace ? [heatmapTrace] : [])];
+      const plotData = [
+        ...(choroplethTrace ? [choroplethTrace] : []),
+        ...legendTraces,
+        dotTrace,
+        ...(heatmapTrace ? [heatmapTrace] : [])
+      ];
 
       // Fixed map view (defaults to framing the continental US) so the map
       // doesn't jump to fit whatever subset of data is currently loaded.

@@ -118,13 +118,19 @@ zip, or why). All rows sharing a zip code are folded together:
   nothing to draw from and stays off regardless of `ShowHeatmap`.
 
 The heat map (a Plotly `densitymapbox` layer) is drawn on top of the
-existing territory shapes and dots, weighted by each zip's total for
-whichever metric `heatmapMetric` currently names. That variable is meant to
-be set by a Sigma control you build elsewhere in the workbook (e.g. a
-button set with options `MM Opp`, `MM Sales`, `Mtgs`) — the plugin only
-reads it, so wire up a control bound to the same variable if you want
-viewers to switch metrics live. The match is case-insensitive; anything
-unrecognized (including the variable being unset) falls back to `MM Opp`.
+territory shapes but below the zip centroid dots, weighted by each zip's
+total for whichever metric `heatmapMetric` currently names. (Plotly's
+mapbox engine hardcodes a fixed stacking order — territory shapes below
+the heat map below the dots — regardless of trace order, which is why the
+territory shapes are always drawn as a single `choroplethmapbox` trace
+rather than one `scattermapbox` fill-to-self trace per territory;
+`choroplethmapbox` only supports a single uniform shape border color
+rather than one tinted per territory.) That variable is meant to be set
+by a Sigma control you build elsewhere in the workbook (e.g. a button set
+with options `MM Opp`, `MM Sales`, `Mtgs`) — the plugin only reads it, so
+wire up a control bound to the same variable if you want viewers to
+switch metrics live. The match is case-insensitive; anything unrecognized
+(including the variable being unset) falls back to `MM Opp`.
 
 ## Local development
 
