@@ -16,10 +16,16 @@ a table, `IN` condition on a control, etc).
 
 ## How it works
 
-1. Point the plugin at a Sigma element with one row per zip code, with a zip
-   code column and a territory/region column (used purely for coloring).
-   Sigma doesn't need to supply any geographic data — the plugin bundles its
-   own zip code (ZCTA) boundary shapes.
+1. Point the plugin at a Sigma element with a zip code column and a
+   territory/region column (used purely for coloring). Sigma doesn't need
+   to supply any geographic data — the plugin bundles its own zip code
+   (ZCTA) boundary shapes. The source can have **multiple rows per zip
+   code** (e.g. one row per channel, product line, etc.) — every row for a
+   given zip is aggregated together, as described in
+   [Per-channel metrics and the heat map](#per-channel-metrics-and-the-heat-map)
+   below. If you need to view one specific slice of the data (e.g. one
+   product line), filter the source element upstream with a normal Sigma
+   control — the plugin just aggregates whatever rows come through.
 2. The plugin looks up each zip's boundary polygon and centroid from that
    bundled dataset, fills each zip's shape with a color derived from its
    territory value, and plots a small dot at each zip's centroid on top.
@@ -81,13 +87,44 @@ When you add this plugin to a Sigma workbook, the editor panel exposes:
 | --- | --- | --- |
 | `source` | Element | The Sigma element supplying the data to plot. |
 | `zipcode` | Column | The 5-digit zip code for each row. |
-| `territory` | Column | The value used to color each zip's shape and dot (e.g. sales territory, region). |
+| `territory` | Column | The value used to color each zip's shape and dot (e.g. sales territory, region). Expected to be the same for every row of a given zip. |
+| `channel` | Column | Optional. Groups the per-zip tooltip breakdown (e.g. `FI`, `IP`, `RW`). See below. |
+| `mmOpp` / `mmSales` / `mtgs` | Column | Optional. Numeric columns summed per zip (and per channel, if `channel` is set) for the tooltip and heat map. |
 | `tooltipFields` | Column (multiple) | Extra columns to show when hovering over a territory's shape (e.g. rep name, quota). Treated as per-territory attributes — shows the first non-empty value found among that territory's rows, not an aggregate across all its zips. |
 | `filterZipcode` | Control variable | The variable the plugin writes selected zip codes to, comma-separated. |
+| `heatmapMetric` | Control variable | Read-only from the plugin's side — bind a Sigma control (e.g. a button set) elsewhere in the workbook to this variable so viewers can switch the heat map between `MM Opp`, `MM Sales`, and `Mtgs` live. See below. |
 | `ShowLegend` | Toggle | Show/hide the map legend. Default: on. |
+| `ShowHeatmap` | Toggle | Show/hide the heat map layer. Default: off. |
+| `HeatmapRadius` | Text | Heat map point radius in pixels. Default: `30`. |
 | `MapStyle` | Text | One of `light`, `dark`, `streets`, `outdoors`, `satellite`, `satellite-streets`. Default: `light`. |
 | `MapCenterLat` / `MapCenterLon` / `MapZoom` | Text | Fixed map view so it doesn't jump to fit whatever data is currently loaded. Defaults to framing the continental US. |
 | `MapboxAccessToken` | Secure text | Your [Mapbox access token](https://docs.mapbox.com/help/getting-started/access-tokens/), required to render the map. |
+
+### Per-channel metrics and the heat map
+
+The source element can have multiple rows per zip code — e.g. one row per
+`channel` per zip, or more (the plugin doesn't care how many rows share a
+zip, or why). All rows sharing a zip code are folded together:
+
+- **Territory** is taken from the first row seen for that zip (it's expected
+  to be constant per zip, not aggregated).
+- **`mmOpp` / `mmSales` / `mtgs`** are **summed**, both per `channel` (for
+  the dot's hover tooltip) and overall per zip (for the heat map). If
+  `channel` isn't configured, the tooltip just shows each zip's totals with
+  no breakdown.
+- Zip code and territory are still required; `channel`, `mmOpp`, `mmSales`,
+  and `mtgs` are all optional and independent — configure whichever ones
+  your data has. Without any of the three metric columns, the heat map has
+  nothing to draw from and stays off regardless of `ShowHeatmap`.
+
+The heat map (a Plotly `densitymapbox` layer) is drawn on top of the
+existing territory shapes and dots, weighted by each zip's total for
+whichever metric `heatmapMetric` currently names. That variable is meant to
+be set by a Sigma control you build elsewhere in the workbook (e.g. a
+button set with options `MM Opp`, `MM Sales`, `Mtgs`) — the plugin only
+reads it, so wire up a control bound to the same variable if you want
+viewers to switch metrics live. The match is case-insensitive; anything
+unrecognized (including the variable being unset) falls back to `MM Opp`.
 
 ## Local development
 

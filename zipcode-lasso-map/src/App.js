@@ -65,6 +65,11 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+function formatNumber(n) {
+  if (!Number.isFinite(n)) return '0';
+  return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+
 // Zip codes come from Sigma in whatever format the source column happens to
 // use -- a number (dropping a leading zero, e.g. "01001" -> 1001), a
 // ZIP+4 like "89701-1234", or with stray whitespace. Normalizing to a plain
@@ -81,18 +86,31 @@ function normalizeZip(rawZip) {
   return digits ? digits[0].padStart(5, '0').slice(0, 5) : null;
 }
 
+// The heat map metric picker is a Sigma variable set by a control (e.g. a
+// button set) the user builds elsewhere in the workbook -- it's expected to
+// hold one of these three labels, matched case-insensitively. "MM Opp" wins
+// on anything unrecognized (including the variable being unset), so the
+// heat map still shows something reasonable before a control is wired up.
+function metricKeyFromLabel(label) {
+  const normalized = String(label || '').trim().toLowerCase();
+  if (normalized === 'mm sales') return 'mmSales';
+  if (normalized === 'mtgs') return 'mtgs';
+  return 'mmOpp';
+}
+
 // Roughly centers and frames the continental US. Used as the fixed map view
 // so the map doesn't re-center/re-zoom to fit whatever subset of data (e.g.
 // after a lasso selection filters the source) happens to be loaded.
 const DEFAULT_MAP_CENTER_LAT = 39.8283;
 const DEFAULT_MAP_CENTER_LON = -98.5795;
 const DEFAULT_MAP_ZOOM = 3.3;
+const DEFAULT_HEATMAP_RADIUS = 30;
 
 // Zip code (ZCTA) boundary + centroid lookup, bundled with the plugin so
 // Sigma only needs to supply a zip code and a territory per row -- no
-// latitude/longitude columns required. Derived from Census TIGER ZCTA
-// boundaries (public domain), simplified via
-// https://github.com/ndrezn/zip-code-geojson.
+// latitude/longitude columns required. See README.md for the dataset's
+// full lineage (Census cartographic boundary file, plus a GeoNames-derived
+// fallback for zip codes with no ZCTA at all).
 const ZCTA_DATA_URL = `${process.env.PUBLIC_URL}/data/zcta.json`;
 
 // Only the outer ring of each polygon is used (holes are ignored) -- at this
@@ -108,12 +126,12 @@ function outerRings(geometry) {
   return [];
 }
 
-// About 9% of ZCTAs in the bundled dataset have a centroid but no boundary
-// polygon (e.g. PO-box-only zip codes with no land area). Without this,
-// those zips would render as an invisible gap in an otherwise filled
-// territory even though they're valid rows in the source data. Draw a small
-// square centered on the centroid instead, so there's at least a visible
-// patch of color rather than an unexplained hole.
+// Some zips in the bundled dataset have a centroid but no boundary polygon
+// (e.g. PO-box-only or single-organization zip codes with no ZCTA at all).
+// Without this, those zips would render as an invisible gap in an otherwise
+// filled territory even though they're valid rows in the source data. Draw
+// a small square centered on the centroid instead, so there's at least a
+// visible patch of color rather than an unexplained hole.
 const FALLBACK_SHAPE_RADIUS_DEG = 0.025;
 
 function ringsForZip(entry) {
@@ -135,10 +153,17 @@ client.config.configureEditorPanel([
   { type: "element", name: "source" },
   { type: "column", name: "zipcode", source: "source", allowMultiple: false },
   { type: "column", name: "territory", source: "source", allowMultiple: false },
+  { type: "column", name: "channel", source: "source", allowMultiple: false },
+  { type: "column", name: "mmOpp", source: "source", allowMultiple: false },
+  { type: "column", name: "mmSales", source: "source", allowMultiple: false },
+  { type: "column", name: "mtgs", source: "source", allowMultiple: false },
   { type: "column", name: "tooltipFields", source: "source", allowMultiple: true },
   { type: "variable", name: "filterZipcode" },
+  { type: "variable", name: "heatmapMetric" },
   { name: "Variables", type: 'group' },
   { name: 'ShowLegend', source: "Variables", type: "toggle", defaultValue: true },
+  { name: 'ShowHeatmap', source: "Variables", type: "toggle", defaultValue: false },
+  { name: 'HeatmapRadius', source: "Variables", type: 'text', defaultValue: String(DEFAULT_HEATMAP_RADIUS) },
   { name: 'MapStyle', source: "Variables", type: 'text', defaultValue: "light" },
   { name: 'MapCenterLat', source: "Variables", type: 'text', defaultValue: String(DEFAULT_MAP_CENTER_LAT) },
   { name: 'MapCenterLon', source: "Variables", type: 'text', defaultValue: String(DEFAULT_MAP_CENTER_LON) },
@@ -150,13 +175,16 @@ function App() {
   const config = useConfig();
   const mapboxAccessToken = config.MapboxAccessToken;
   // useElementData caps out at 25,000 rows and silently truncates anything
-  // past that -- a "one row per US zip code" source can run close to or
-  // past 33,000 rows, so useIncrementalElementData (no row cap, fetched in
-  // chunks via loadMoreData) is used instead to make sure every row makes
-  // it to the plugin.
+  // past that -- a source with multiple rows per zip (one per channel,
+  // product line, etc.) can run past that easily, so
+  // useIncrementalElementData (no row cap, fetched in chunks via
+  // loadMoreData) is used instead to make sure every row makes it through.
   const [sigmaData, loadMoreData, dataInfo] = useIncrementalElementData(config.source);
   const columns = useElementColumns(config.source);
   const [filterZipcode, setFilterZipcode] = useVariable(config.filterZipcode);
+  // Set by a Sigma control (e.g. a button set) built elsewhere in the
+  // workbook -- the plugin only reads this, it never writes it.
+  const [heatmapMetric] = useVariable(config.heatmapMetric);
   const [prevSigmaData, setPrevSigmaData] = useState(null);
   const prevColumnsRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
@@ -242,53 +270,101 @@ function App() {
         return;
       }
 
+      // The channel/metric columns are optional -- without them the plugin
+      // still works exactly as before (one shape+dot per zip, no
+      // per-channel breakdown, no heat map).
+      const channelCol = config.channel ? sigmaData[config.channel] : null;
+      const mmOppCol = config.mmOpp ? sigmaData[config.mmOpp] : null;
+      const mmSalesCol = config.mmSales ? sigmaData[config.mmSales] : null;
+      const mtgsCol = config.mtgs ? sigmaData[config.mtgs] : null;
+
       const normalizedZip = zip.map(normalizeZip);
 
-      // Group row indices by territory, keeping only zips we have shapes for.
-      // Zip codes with no entry in the bundled dataset (e.g. non-US zips, or
-      // US zip codes with no residential land area, which Census excludes
-      // from ZCTAs entirely) are counted so we can show a "not shown" note,
-      // the same way Sigma's own region map surfaces unmapped rows.
-      const indicesByTerritory = new Map();
-      const unmatchedRaw = [];
-      zip.forEach((z, index) => {
-        if (!zctaByZip.has(normalizedZip[index])) {
-          unmatchedRaw.push(z);
+      // A zip code can appear on many rows (one per channel, product line,
+      // etc.), so every row is first folded into one aggregate per zip:
+      // its territory, plus MM Opp / MM Sales / Mtgs summed per channel
+      // and overall (the overall totals drive the heat map; the
+      // per-channel totals drive the dot tooltip). Zip codes with no entry
+      // in the bundled dataset are collected separately for the
+      // "not shown" note -- as a set, so a zip missing across many rows
+      // is still counted once, matching what the note says.
+      const zipAgg = new Map();
+      const unmatchedZips = new Set();
+
+      zip.forEach((rawZip, index) => {
+        const normZip = normalizedZip[index];
+        if (!zctaByZip.has(normZip)) {
+          unmatchedZips.add(rawZip);
           return;
         }
-        const t = territory[index];
-        if (!indicesByTerritory.has(t)) {
-          indicesByTerritory.set(t, []);
-        }
-        indicesByTerritory.get(t).push(index);
-      });
-      const unmappedCount = unmatchedRaw.length;
 
+        if (!zipAgg.has(normZip)) {
+          zipAgg.set(normZip, {
+            rawZip,
+            firstIndex: index,
+            territory: territory[index],
+            channelTotals: new Map(),
+            totals: { mmOpp: 0, mmSales: 0, mtgs: 0 }
+          });
+        }
+        const agg = zipAgg.get(normZip);
+
+        const opp = mmOppCol ? Number(mmOppCol[index]) || 0 : 0;
+        const sales = mmSalesCol ? Number(mmSalesCol[index]) || 0 : 0;
+        const mtg = mtgsCol ? Number(mtgsCol[index]) || 0 : 0;
+
+        agg.totals.mmOpp += opp;
+        agg.totals.mmSales += sales;
+        agg.totals.mtgs += mtg;
+
+        const ch = channelCol ? channelCol[index] : null;
+        if (ch !== null && ch !== undefined && ch !== '') {
+          if (!agg.channelTotals.has(ch)) {
+            agg.channelTotals.set(ch, { mmOpp: 0, mmSales: 0, mtgs: 0 });
+          }
+          const chTotal = agg.channelTotals.get(ch);
+          chTotal.mmOpp += opp;
+          chTotal.mmSales += sales;
+          chTotal.mtgs += mtg;
+        }
+      });
+
+      const unmappedCount = unmatchedZips.size;
       if (unmappedCount > 0) {
-        const uniqueUnmatched = Array.from(new Set(unmatchedRaw));
         console.warn(
-          `Zip Code Lasso Map: ${unmappedCount} row(s) (${uniqueUnmatched.length} distinct zip value(s)) did not match the boundary dataset. First 20:`,
-          uniqueUnmatched.slice(0, 20)
+          `Zip Code Lasso Map: ${unmappedCount} distinct zip value(s) did not match the boundary dataset. First 20:`,
+          Array.from(unmatchedZips).slice(0, 20)
         );
       }
 
-      const sortedTerritories = Array.from(indicesByTerritory.keys()).sort((a, b) =>
+      // Group unique zips by territory for the filled shapes.
+      const zipsByTerritory = new Map();
+      zipAgg.forEach((agg, normZip) => {
+        const t = agg.territory;
+        if (!zipsByTerritory.has(t)) {
+          zipsByTerritory.set(t, []);
+        }
+        zipsByTerritory.get(t).push(normZip);
+      });
+
+      const sortedTerritories = Array.from(zipsByTerritory.keys()).sort((a, b) =>
         String(a).localeCompare(String(b))
       );
       const colorByTerritory = assignColors(sortedTerritories);
 
+      const tooltipFieldIds = Array.isArray(config.tooltipFields) ? config.tooltipFields : [];
+
       // One filled trace per territory: concatenate every zip's outer ring
       // into a single scattermapbox trace, separated by null breaks so
       // Plotly draws each zip as its own closed shape within the trace.
-      const tooltipFieldIds = Array.isArray(config.tooltipFields) ? config.tooltipFields : [];
-
       const fillTraces = sortedTerritories.map(t => {
         const color = colorByTerritory.get(t);
         const lons = [];
         const lats = [];
+        const zipsInTerritory = zipsByTerritory.get(t);
 
-        indicesByTerritory.get(t).forEach(index => {
-          const rings = ringsForZip(zctaByZip.get(normalizedZip[index]));
+        zipsInTerritory.forEach(normZip => {
+          const rings = ringsForZip(zctaByZip.get(normZip));
           rings.forEach(ring => {
             if (lons.length) {
               lons.push(null);
@@ -305,7 +381,7 @@ function App() {
         // rep name or quota that's the same for every zip in the
         // territory) -- shows the first non-empty value found rather than
         // aggregating across the territory's rows.
-        const firstIndex = indicesByTerritory.get(t)[0];
+        const firstIndex = zipAgg.get(zipsInTerritory[0]).firstIndex;
         const tooltipLines = [`<b>${t}</b>`];
         tooltipFieldIds.forEach(fieldId => {
           const columnValues = sigmaData[fieldId];
@@ -339,21 +415,36 @@ function App() {
       // Single trace of centroid dots across all zips -- this is what
       // actually receives lasso/box selection (Plotly doesn't support
       // lasso-selecting filled map shapes), colored to match each zip's
-      // territory fill.
+      // territory fill. Its hover shows the per-channel MM Opp/MM
+      // Sales/Mtgs breakdown when those columns are configured.
       const dotLons = [];
       const dotLats = [];
       const dotColors = [];
       const dotZips = [];
       const dotLabels = [];
 
-      zip.forEach((z, index) => {
-        const entry = zctaByZip.get(normalizedZip[index]);
-        if (!entry) return;
+      zipAgg.forEach((agg, normZip) => {
+        const entry = zctaByZip.get(normZip);
         dotLons.push(entry.lon);
         dotLats.push(entry.lat);
-        dotColors.push(colorByTerritory.get(territory[index]));
-        dotZips.push(z);
-        dotLabels.push(`${z} — ${territory[index]}`);
+        dotColors.push(colorByTerritory.get(agg.territory));
+        dotZips.push(agg.rawZip);
+
+        const lines = [`<b>${agg.rawZip}</b> — ${agg.territory}`];
+        const sortedChannels = Array.from(agg.channelTotals.keys()).sort((a, b) =>
+          String(a).localeCompare(String(b))
+        );
+        sortedChannels.forEach(ch => {
+          const chTotal = agg.channelTotals.get(ch);
+          const parts = [];
+          if (mmOppCol) parts.push(`MM Opp: ${formatNumber(chTotal.mmOpp)}`);
+          if (mmSalesCol) parts.push(`MM Sales: ${formatNumber(chTotal.mmSales)}`);
+          if (mtgsCol) parts.push(`Mtgs: ${formatNumber(chTotal.mtgs)}`);
+          if (parts.length) {
+            lines.push(`${ch}: ${parts.join(', ')}`);
+          }
+        });
+        dotLabels.push(lines.join('<br>'));
       });
 
       const dotTrace = {
@@ -369,7 +460,43 @@ function App() {
         showlegend: false
       };
 
-      const plotData = [...fillTraces, dotTrace];
+      // Optional heat map layer, drawn on top of the territory shapes and
+      // dots. Its intensity per zip is that zip's total (summed across all
+      // channels) for whichever of MM Opp / MM Sales / Mtgs the
+      // heatmapMetric Sigma variable currently selects.
+      let heatmapTrace = null;
+      if (config.ShowHeatmap && (mmOppCol || mmSalesCol || mtgsCol)) {
+        const metricKey = metricKeyFromLabel(heatmapMetric);
+        const heatLons = [];
+        const heatLats = [];
+        const heatWeights = [];
+
+        zipAgg.forEach((agg, normZip) => {
+          const weight = agg.totals[metricKey];
+          if (!weight || weight <= 0) return;
+          const entry = zctaByZip.get(normZip);
+          heatLons.push(entry.lon);
+          heatLats.push(entry.lat);
+          heatWeights.push(weight);
+        });
+
+        if (heatLons.length) {
+          const parsedRadius = parseFloat(config.HeatmapRadius);
+          heatmapTrace = {
+            type: 'densitymapbox',
+            lon: heatLons,
+            lat: heatLats,
+            z: heatWeights,
+            radius: Number.isFinite(parsedRadius) ? parsedRadius : DEFAULT_HEATMAP_RADIUS,
+            colorscale: 'Jet',
+            opacity: 0.7,
+            showscale: config.ShowLegend,
+            hoverinfo: 'skip'
+          };
+        }
+      }
+
+      const plotData = [...fillTraces, dotTrace, ...(heatmapTrace ? [heatmapTrace] : [])];
 
       // Fixed map view (defaults to framing the continental US) so the map
       // doesn't jump to fit whatever subset of data is currently loaded.
@@ -453,7 +580,7 @@ function App() {
         setFilterZipcode(null);
       });
     }
-  }, [sigmaData, config, filterZipcode, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
+  }, [sigmaData, config, filterZipcode, heatmapMetric, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
 
   return (
     <div id='myDiv'></div>
