@@ -209,7 +209,9 @@ function App() {
   // loadMoreData) is used instead to make sure every row makes it through.
   const [sigmaData, loadMoreData, dataInfo] = useIncrementalElementData(config.source);
   const columns = useElementColumns(config.source);
-  const [filterZipcode, setFilterZipcode] = useVariable(config.filterZipcode);
+  // The current value is never read back -- this variable is write-only
+  // from the plugin's side (set on lasso-select, cleared on deselect).
+  const [, setFilterZipcode] = useVariable(config.filterZipcode);
   // Set by a Sigma control (e.g. a button set) built elsewhere in the
   // workbook -- the plugin only reads this, it never writes it.
   const [heatmapMetric] = useVariable(config.heatmapMetric);
@@ -625,6 +627,14 @@ function App() {
       Plotly.setPlotConfig({ mapboxAccessToken: mapboxAccessToken });
       Plotly.newPlot('myDiv', plotData, layout, { displayModeBar: true });
 
+      // Plotly.newPlot re-draws the plot but doesn't clear listeners
+      // previously registered on this same div -- without this, every time
+      // this effect re-runs (e.g. on a legitimate data/config change) it'd
+      // stack another copy of each handler below on top of the old ones,
+      // so a single lasso selection would fire setFilterZipcode multiple
+      // times over with increasingly stale closures.
+      graphDiv.removeAllListeners();
+
       graphDiv.on('plotly_selected', function (eventData) {
         const selectedZipcodes = eventData && eventData.points
           ? eventData.points
@@ -657,7 +667,14 @@ function App() {
         });
       }
     }
-  }, [sigmaData, config, filterZipcode, heatmapMetric, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
+    // filterZipcode is intentionally omitted: it's only ever written here
+    // (via setFilterZipcode, from the lasso/deselect handlers below), never
+    // read. Including it would re-run this whole effect -- tearing down
+    // and rebuilding the map with a fresh Plotly.newPlot -- every time the
+    // plugin's own lasso selection writes to it, wiping out the selection
+    // that was just made.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sigmaData, config, heatmapMetric, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
 
   return (
     <div id='myDiv'></div>
