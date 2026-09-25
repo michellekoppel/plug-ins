@@ -285,6 +285,14 @@ function App() {
     if (
       zctaByZip &&
       sigmaData &&
+      // A large source (many zips, or several rows per zip for multiple
+      // channels) can take several chunks to fully arrive via
+      // loadMoreData. Without this, every chunk in progress redraws the
+      // whole map from scratch -- if that redraw happens to land right
+      // after the user lassos a selection, it wipes the selection they
+      // just made. Waiting for the complete data means the map draws once
+      // per real change instead of once per chunk.
+      dataInfo.isComplete &&
       (JSON.stringify(sigmaData) !== JSON.stringify(prevSigmaData) ||
         columnsKey !== prevColumnsRef.current)
     ) {
@@ -674,7 +682,7 @@ function App() {
     // plugin's own lasso selection writes to it, wiping out the selection
     // that was just made.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sigmaData, config, heatmapMetric, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
+  }, [sigmaData, config, dataInfo.isComplete, heatmapMetric, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
 
   return (
     <div id='myDiv'></div>
