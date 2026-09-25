@@ -116,6 +116,24 @@ const HEATMAP_COLORSCALE = [
   [1, 'rgba(230,20,20,0.9)']
 ];
 
+// densitymapbox's radius is a constant number of screen pixels, which
+// covers a shrinking geographic area as you zoom in -- but not fast
+// enough to stay within a single zip once you're zoomed in past a
+// regional view, so a zip's heat visibly bleeds into its neighbors'.
+// Below this zoom, the configured radius is used as-is (a wide, blended
+// look is what you want at state/national zoom). Above it, radius is
+// halved every 2 zoom levels on top of that natural shrinkage, so heat
+// stays roughly confined to the zip it belongs to once you're zoomed in
+// far enough to see individual zip shapes.
+const HEATMAP_RADIUS_REFERENCE_ZOOM = 8;
+const HEATMAP_RADIUS_MIN = 4;
+
+function radiusForZoom(baseRadius, zoom) {
+  if (!Number.isFinite(zoom) || zoom <= HEATMAP_RADIUS_REFERENCE_ZOOM) return baseRadius;
+  const zoomDelta = zoom - HEATMAP_RADIUS_REFERENCE_ZOOM;
+  return Math.max(HEATMAP_RADIUS_MIN, baseRadius / Math.pow(2, zoomDelta / 2));
+}
+
 // Zip code (ZCTA) boundary + centroid lookup, bundled with the plugin so
 // Sigma only needs to supply a zip code and a territory per row -- no
 // latitude/longitude columns required. See README.md for the dataset's
@@ -498,11 +516,22 @@ function App() {
         showlegend: false
       };
 
+      // Fixed map view (defaults to framing the continental US) so the map
+      // doesn't jump to fit whatever subset of data is currently loaded.
+      const parsedCenterLat = parseFloat(config.MapCenterLat);
+      const parsedCenterLon = parseFloat(config.MapCenterLon);
+      const parsedZoom = parseFloat(config.MapZoom);
+
+      const centerLat = Number.isFinite(parsedCenterLat) ? parsedCenterLat : DEFAULT_MAP_CENTER_LAT;
+      const centerLon = Number.isFinite(parsedCenterLon) ? parsedCenterLon : DEFAULT_MAP_CENTER_LON;
+      const zoom = Number.isFinite(parsedZoom) ? parsedZoom : DEFAULT_MAP_ZOOM;
+
       // Optional heat map layer, drawn on top of the territory shapes and
       // dots. Its intensity per zip is that zip's total (summed across all
       // channels) for whichever of MM Opp / MM Sales / Mtgs the
       // heatmapMetric Sigma variable currently selects.
       let heatmapTrace = null;
+      let baseHeatmapRadius = DEFAULT_HEATMAP_RADIUS;
       if (config.ShowHeatmap && (mmOppCol || mmSalesCol || mtgsCol)) {
         const metricKey = metricKeyFromLabel(heatmapMetric);
         const heatLons = [];
@@ -520,12 +549,13 @@ function App() {
 
         if (heatLons.length) {
           const parsedRadius = parseFloat(config.HeatmapRadius);
+          baseHeatmapRadius = Number.isFinite(parsedRadius) ? parsedRadius : DEFAULT_HEATMAP_RADIUS;
           heatmapTrace = {
             type: 'densitymapbox',
             lon: heatLons,
             lat: heatLats,
             z: heatWeights,
-            radius: Number.isFinite(parsedRadius) ? parsedRadius : DEFAULT_HEATMAP_RADIUS,
+            radius: radiusForZoom(baseHeatmapRadius, zoom),
             colorscale: HEATMAP_COLORSCALE,
             // Opacity is already baked into each colorscale stop above, so
             // this stays at 1 rather than dimming everything a second time.
@@ -542,16 +572,6 @@ function App() {
         dotTrace,
         ...(heatmapTrace ? [heatmapTrace] : [])
       ];
-
-      // Fixed map view (defaults to framing the continental US) so the map
-      // doesn't jump to fit whatever subset of data is currently loaded.
-      const parsedCenterLat = parseFloat(config.MapCenterLat);
-      const parsedCenterLon = parseFloat(config.MapCenterLon);
-      const parsedZoom = parseFloat(config.MapZoom);
-
-      const centerLat = Number.isFinite(parsedCenterLat) ? parsedCenterLat : DEFAULT_MAP_CENTER_LAT;
-      const centerLon = Number.isFinite(parsedCenterLon) ? parsedCenterLon : DEFAULT_MAP_CENTER_LON;
-      const zoom = Number.isFinite(parsedZoom) ? parsedZoom : DEFAULT_MAP_ZOOM;
 
       // Check if MapStyle is valid, if not, use the default value
       const validMapStyles = ['light', 'dark', 'streets', 'outdoors', 'satellite', 'satellite-streets'];
@@ -624,6 +644,18 @@ function App() {
       graphDiv.on('plotly_deselect', function () {
         setFilterZipcode(null);
       });
+
+      // Re-scale the heat map's radius live as the viewer zooms, so it
+      // stays roughly confined to each zip instead of bleeding into its
+      // neighbors once you're zoomed in past a regional view.
+      if (heatmapTrace) {
+        const heatmapTraceIndex = plotData.length - 1;
+        graphDiv.on('plotly_relayout', function (relayoutData) {
+          const newZoom = relayoutData && relayoutData['mapbox.zoom'];
+          if (typeof newZoom !== 'number') return;
+          Plotly.restyle(graphDiv, { radius: [radiusForZoom(baseHeatmapRadius, newZoom)] }, [heatmapTraceIndex]);
+        });
+      }
     }
   }, [sigmaData, config, filterZipcode, heatmapMetric, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
 

@@ -95,7 +95,7 @@ When you add this plugin to a Sigma workbook, the editor panel exposes:
 | `heatmapMetric` | Control variable | Read-only from the plugin's side — bind a Sigma control (e.g. a button set) elsewhere in the workbook to this variable so viewers can switch the heat map between `MM Opp`, `MM Sales`, and `Mtgs` live. See below. |
 | `ShowLegend` | Toggle | Show/hide the map legend. Default: on. |
 | `ShowHeatmap` | Toggle | Show/hide the heat map layer. Default: off. |
-| `HeatmapRadius` | Text | Heat map point radius in pixels. Default: `30`. |
+| `HeatmapRadius` | Text | Heat map point radius in pixels, at a regional zoom level or wider. Shrinks automatically as you zoom in further (see below). Default: `30`. |
 | `MapStyle` | Text | One of `light`, `dark`, `streets`, `outdoors`, `satellite`, `satellite-streets`. Default: `light`. |
 | `MapCenterLat` / `MapCenterLon` / `MapZoom` | Text | Fixed map view so it doesn't jump to fit whatever data is currently loaded. Defaults to framing the continental US. |
 | `MapboxAccessToken` | Secure text | Your [Mapbox access token](https://docs.mapbox.com/help/getting-started/access-tokens/), required to render the map. |
@@ -131,6 +131,17 @@ with options `MM Opp`, `MM Sales`, `Mtgs`) — the plugin only reads it, so
 wire up a control bound to the same variable if you want viewers to
 switch metrics live. The match is case-insensitive; anything unrecognized
 (including the variable being unset) falls back to `MM Opp`.
+
+`densitymapbox`'s radius is a constant number of screen pixels, which
+covers a shrinking geographic area as you zoom in, but not fast enough to
+stay within a single zip -- past a regional view it visibly bleeds into
+neighboring zips, including ones with no data of their own. Above zoom
+level 8, the plugin shrinks the radius live as you zoom (down to a 4px
+floor) so heat stays roughly confined to the zip it belongs to; below
+that, `HeatmapRadius` is used as configured. Note that at close zoom the
+heat map can also show sharp rectangular seams instead of a smooth
+gradient -- that's a known rendering limitation of the (deprecated)
+Mapbox GL engine Plotly uses for this trace type, not a data issue.
 
 ## Local development
 
