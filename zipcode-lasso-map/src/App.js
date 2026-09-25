@@ -104,7 +104,24 @@ function metricKeyFromLabel(label) {
 const DEFAULT_MAP_CENTER_LAT = 39.8283;
 const DEFAULT_MAP_CENTER_LON = -98.5795;
 const DEFAULT_MAP_ZOOM = 3.3;
-const DEFAULT_HEATMAP_RADIUS = 30;
+const DEFAULT_HEATMAP_RADIUS = 20;
+
+// Plotly's densitymapbox colors the entire kernel-density surface,
+// including near-zero density -- with an ordinary colorscale that paints
+// low density as a solid color too, so instead of isolated blobs you get
+// one continuous wash covering the whole area between points, hiding
+// whatever's underneath (the territory shapes and dots). Fading the low
+// end to fully transparent lets the map underneath show through wherever
+// there isn't real density, so only the actual hot spots read as blobs.
+const HEATMAP_COLORSCALE = [
+  [0, 'rgba(0,0,255,0)'],
+  [0.15, 'rgba(0,0,255,0.55)'],
+  [0.35, 'rgba(0,200,255,0.65)'],
+  [0.55, 'rgba(0,220,120,0.7)'],
+  [0.7, 'rgba(255,235,0,0.8)'],
+  [0.85, 'rgba(255,140,0,0.85)'],
+  [1, 'rgba(230,20,20,0.9)']
+];
 
 // Zip code (ZCTA) boundary + centroid lookup, bundled with the plugin so
 // Sigma only needs to supply a zip code and a territory per row -- no
@@ -488,9 +505,11 @@ function App() {
             lat: heatLats,
             z: heatWeights,
             radius: Number.isFinite(parsedRadius) ? parsedRadius : DEFAULT_HEATMAP_RADIUS,
-            colorscale: 'Jet',
-            opacity: 0.7,
-            showscale: config.ShowLegend,
+            colorscale: HEATMAP_COLORSCALE,
+            // Opacity is already baked into each colorscale stop above, so
+            // this stays at 1 rather than dimming everything a second time.
+            opacity: 1,
+            showscale: false,
             hoverinfo: 'skip'
           };
         }
