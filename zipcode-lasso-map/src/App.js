@@ -582,6 +582,7 @@ function App() {
         dotTrace,
         ...(heatmapTrace ? [heatmapTrace] : [])
       ];
+      const dotTraceIndex = plotData.indexOf(dotTrace);
 
       // Check if MapStyle is valid, if not, use the default value
       const validMapStyles = ['light', 'dark', 'streets', 'outdoors', 'satellite', 'satellite-streets'];
@@ -655,11 +656,19 @@ function App() {
         if (uniqueSelectedZipcodes.length) {
           setFilterZipcode(uniqueSelectedZipcodes.join(","));
         } else {
+          // A plain click with no drag (e.g. clicking outside every shape
+          // to clear the selection) still fires plotly_selected, just with
+          // no points -- Plotly doesn't clear its own dimmed/undimmed
+          // selection styling for that on its own, so it has to be reset
+          // explicitly or the map stays visually stuck on the old
+          // selection even though the filter variable is cleared below.
+          Plotly.restyle(graphDiv, { selectedpoints: [null] }, [dotTraceIndex]);
           setFilterZipcode(null);
         }
       });
 
       graphDiv.on('plotly_deselect', function () {
+        Plotly.restyle(graphDiv, { selectedpoints: [null] }, [dotTraceIndex]);
         setFilterZipcode(null);
       });
 
