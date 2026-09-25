@@ -1,15 +1,15 @@
 {
   "files": {
     "main.css": "/plug-ins/zipcode-lasso-map/static/css/main.078c9ce4.css",
-    "main.js": "/plug-ins/zipcode-lasso-map/static/js/main.c6fa5428.js",
+    "main.js": "/plug-ins/zipcode-lasso-map/static/js/main.bb586ca9.js",
     "static/js/453.957faa1b.chunk.js": "/plug-ins/zipcode-lasso-map/static/js/453.957faa1b.chunk.js",
     "index.html": "/plug-ins/zipcode-lasso-map/index.html",
     "main.078c9ce4.css.map": "/plug-ins/zipcode-lasso-map/static/css/main.078c9ce4.css.map",
-    "main.c6fa5428.js.map": "/plug-ins/zipcode-lasso-map/static/js/main.c6fa5428.js.map",
+    "main.bb586ca9.js.map": "/plug-ins/zipcode-lasso-map/static/js/main.bb586ca9.js.map",
     "453.957faa1b.chunk.js.map": "/plug-ins/zipcode-lasso-map/static/js/453.957faa1b.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.078c9ce4.css",
-    "static/js/main.c6fa5428.js"
+    "static/js/main.bb586ca9.js"
   ]
 }
