@@ -642,7 +642,15 @@ function App() {
       };
 
       Plotly.setPlotConfig({ mapboxAccessToken: mapboxAccessToken });
-      Plotly.newPlot('myDiv', plotData, layout, { displayModeBar: true });
+      // Plotly.react (not Plotly.newPlot) patches the existing plot in
+      // place instead of tearing down and recreating the whole Mapbox GL
+      // WebGL context every time this effect re-runs. With a data source
+      // that updates frequently (e.g. while a user is actively dragging
+      // zips around in a reassignment tool), newPlot's full teardown
+      // couldn't keep up -- each rebuild has to reload map tiles from
+      // scratch, so a fast stream of updates kept the map stuck showing
+      // that brief "no tiles yet" black state instead of ever finishing.
+      Plotly.react('myDiv', plotData, layout, { displayModeBar: true });
 
       // Re-apply the selection captured above (by zip identity, not
       // index -- the new dot order may differ) so a data refresh that
