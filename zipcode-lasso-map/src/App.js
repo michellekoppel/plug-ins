@@ -459,15 +459,6 @@ function App() {
         colorscale: territoryColorscale,
         showscale: false,
         marker: { opacity: 0.4, line: { color: 'rgba(255,255,255,0.6)', width: 0.5 } },
-        // Lassoing dots also "selects" whichever zip shapes happen to
-        // fall inside the lasso (choroplethmapbox supports selection same
-        // as any other trace), which otherwise darkens just that shape
-        // relative to the rest of the map -- and since only the dots are
-        // meant to be the selection target, matching selected/unselected
-        // opacity to the base opacity keeps every shape's look the same
-        // regardless of what's currently selected.
-        selected: { marker: { opacity: 0.4 } },
-        unselected: { marker: { opacity: 0.4 } },
         text: choroplethText,
         hoverinfo: 'text',
         showlegend: false
