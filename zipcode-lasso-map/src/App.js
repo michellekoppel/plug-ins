@@ -285,14 +285,6 @@ function App() {
     if (
       zctaByZip &&
       sigmaData &&
-      // A large source (many zips, or several rows per zip for multiple
-      // channels) can take several chunks to fully arrive via
-      // loadMoreData. Without this, every chunk in progress redraws the
-      // whole map from scratch -- if that redraw happens to land right
-      // after the user lassos a selection, it wipes the selection they
-      // just made. Waiting for the complete data means the map draws once
-      // per real change instead of once per chunk.
-      dataInfo.isComplete &&
       (JSON.stringify(sigmaData) !== JSON.stringify(prevSigmaData) ||
         columnsKey !== prevColumnsRef.current)
     ) {
@@ -300,6 +292,21 @@ function App() {
       prevColumnsRef.current = columnsKey;
 
       const graphDiv = document.getElementById('myDiv');
+
+      // If a lasso selection is active when this effect re-runs (e.g. a
+      // legitimate data refresh arrives while the user has zips
+      // selected), capture which zips were selected before rebuilding the
+      // plot below, so the selection can be re-applied by zip identity
+      // afterward instead of just disappearing.
+      let previouslySelectedZips = null;
+      if (graphDiv && graphDiv.data) {
+        const prevDotTrace = graphDiv.data.find(t => t.name === 'Zip codes');
+        if (prevDotTrace && Array.isArray(prevDotTrace.selectedpoints) && prevDotTrace.selectedpoints.length) {
+          previouslySelectedZips = new Set(
+            prevDotTrace.selectedpoints.map(i => prevDotTrace.customdata[i])
+          );
+        }
+      }
 
       const zip = sigmaData[config.zipcode];
       const territory = sigmaData[config.territory];
@@ -637,6 +644,19 @@ function App() {
       Plotly.setPlotConfig({ mapboxAccessToken: mapboxAccessToken });
       Plotly.newPlot('myDiv', plotData, layout, { displayModeBar: true });
 
+      // Re-apply the selection captured above (by zip identity, not
+      // index -- the new dot order may differ) so a data refresh that
+      // happens to land while zips are selected doesn't just wipe the
+      // selection out from under the user.
+      if (previouslySelectedZips) {
+        const newSelectedIndices = dotZips
+          .map((z, i) => (previouslySelectedZips.has(z) ? i : null))
+          .filter(i => i !== null);
+        if (newSelectedIndices.length) {
+          Plotly.restyle(graphDiv, { selectedpoints: [newSelectedIndices] }, [dotTraceIndex]);
+        }
+      }
+
       // Plotly.newPlot re-draws the plot but doesn't clear listeners
       // previously registered on this same div -- without this, every time
       // this effect re-runs (e.g. on a legitimate data/config change) it'd
@@ -701,7 +721,7 @@ function App() {
     // plugin's own lasso selection writes to it, wiping out the selection
     // that was just made.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sigmaData, config, dataInfo.isComplete, heatmapMetric, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
+  }, [sigmaData, config, heatmapMetric, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
 
   return (
     <div id='myDiv'></div>
