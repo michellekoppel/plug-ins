@@ -218,6 +218,9 @@ function App() {
   const [prevSigmaData, setPrevSigmaData] = useState(null);
   const prevColumnsRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
+  const [renderTrigger, setRenderTrigger] = useState(0);
+  const renderDebounceRef = useRef(null);
+  const lastSeenContentKeyRef = useRef(null);
 
   // Keep requesting the next chunk until the host reports every row has
   // been delivered.
@@ -226,6 +229,35 @@ function App() {
       loadMoreData();
     }
   }, [config.source, dataInfo.isComplete, dataInfo.rowCount, loadMoreData]);
+
+  // Coalesces a burst of rapid source updates (e.g. while a user is
+  // actively dragging zips between territories in a reassignment tool)
+  // into a single redraw once things settle, instead of rebuilding the
+  // whole map on every single intermediate tick -- which was fast enough
+  // to keep the map stuck flashing between rendered and its brief
+  // "no tiles yet" state, or never finishing at all.
+  useEffect(() => {
+    // Gated by content, not just sigmaData/columns/config changing
+    // reference: the SDK can hand back new objects for all three on
+    // internal ticks even when nothing really changed (useConfig() in
+    // particular returns a fresh object every call), and resetting the
+    // timer on every one of those (rather than only on real changes)
+    // could keep deferring the render indefinitely as long as those ticks
+    // keep arriving faster than the debounce delay.
+    const contentKey = JSON.stringify([sigmaData, columns, config]);
+    if (contentKey === lastSeenContentKeyRef.current) {
+      return;
+    }
+    lastSeenContentKeyRef.current = contentKey;
+
+    if (renderDebounceRef.current) {
+      clearTimeout(renderDebounceRef.current);
+    }
+    renderDebounceRef.current = setTimeout(() => {
+      setRenderTrigger(t => t + 1);
+    }, 250);
+    return () => clearTimeout(renderDebounceRef.current);
+  }, [sigmaData, columns, config]);
 
   useEffect(() => {
     let cancelled = false;
@@ -725,11 +757,22 @@ function App() {
     // filterZipcode is intentionally omitted: it's only ever written here
     // (via setFilterZipcode, from the lasso/deselect handlers below), never
     // read. Including it would re-run this whole effect -- tearing down
-    // and rebuilding the map with a fresh Plotly.newPlot -- every time the
-    // plugin's own lasso selection writes to it, wiping out the selection
-    // that was just made.
+    // and rebuilding the map -- every time the plugin's own lasso
+    // selection writes to it, wiping out the selection that was just
+    // made. sigmaData/columns/config are also intentionally omitted in
+    // favor of renderTrigger, which only changes once the debounce above
+    // settles; this effect still reads their latest values directly
+    // (closed over from the current render) once it actually runs. Since
+    // useConfig() returns a fresh object every call, leaving config as a
+    // direct dependency here would re-run this effect on every render for
+    // any reason at all, completely bypassing the debounce.
+    // prevSigmaData is likewise omitted even though it's read above -- it's
+    // only set here, right before this effect's own content check, so
+    // including it would let it "chase" sigmaData and re-fire this whole
+    // effect on its own the moment a newer tick lands, independently of
+    // (and bypassing) the debounce.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sigmaData, config, heatmapMetric, prevSigmaData, mapboxAccessToken, setFilterZipcode, zctaByZip, columns]);
+  }, [renderTrigger, heatmapMetric, mapboxAccessToken, setFilterZipcode, zctaByZip]);
 
   return (
     <div id='myDiv'></div>
