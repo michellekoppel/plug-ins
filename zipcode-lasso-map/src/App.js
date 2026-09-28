@@ -220,6 +220,13 @@ function App() {
   const [zctaByZip, setZctaByZip] = useState(null);
   const [renderTrigger, setRenderTrigger] = useState(0);
   const renderDebounceRef = useRef(null);
+  // Tracks the viewer's current pan/zoom (updated live via plotly_relayout
+  // below) so a redraw triggered by a data change re-applies whatever view
+  // the viewer is currently looking at, instead of snapping back to the
+  // configured default every time -- otherwise manually zooming in gets
+  // undone by the next redraw, which can happen as often as the source
+  // data changes (e.g. every zip reassignment in a live editing tool).
+  const currentViewRef = useRef(null);
   const lastSeenContentKeyRef = useRef(null);
 
   // Keep requesting the next chunk until the host reports every row has
@@ -566,14 +573,22 @@ function App() {
       };
 
       // Fixed map view (defaults to framing the continental US) so the map
-      // doesn't jump to fit whatever subset of data is currently loaded.
+      // doesn't jump to fit whatever subset of data is currently loaded --
+      // but once the viewer has actually panned/zoomed, that becomes the
+      // baseline instead (see currentViewRef above), so a later redraw
+      // doesn't snap back to the configured default underneath them.
       const parsedCenterLat = parseFloat(config.MapCenterLat);
       const parsedCenterLon = parseFloat(config.MapCenterLon);
       const parsedZoom = parseFloat(config.MapZoom);
 
-      const centerLat = Number.isFinite(parsedCenterLat) ? parsedCenterLat : DEFAULT_MAP_CENTER_LAT;
-      const centerLon = Number.isFinite(parsedCenterLon) ? parsedCenterLon : DEFAULT_MAP_CENTER_LON;
-      const zoom = Number.isFinite(parsedZoom) ? parsedZoom : DEFAULT_MAP_ZOOM;
+      const configCenterLat = Number.isFinite(parsedCenterLat) ? parsedCenterLat : DEFAULT_MAP_CENTER_LAT;
+      const configCenterLon = Number.isFinite(parsedCenterLon) ? parsedCenterLon : DEFAULT_MAP_CENTER_LON;
+      const configZoom = Number.isFinite(parsedZoom) ? parsedZoom : DEFAULT_MAP_ZOOM;
+
+      const currentView = currentViewRef.current;
+      const centerLat = currentView ? currentView.lat : configCenterLat;
+      const centerLon = currentView ? currentView.lon : configCenterLon;
+      const zoom = currentView ? currentView.zoom : configZoom;
 
       // Optional heat map layer, drawn on top of the territory shapes and
       // dots. Its intensity per zip is that zip's total (summed across all
@@ -740,6 +755,17 @@ function App() {
       graphDiv.on('plotly_deselect', function () {
         clearVisualSelection();
         setFilterZipcode(null);
+      });
+
+      // Remember the viewer's pan/zoom as they move around, so a later
+      // redraw (see currentViewRef above) can restore it instead of
+      // resetting to the configured default view.
+      graphDiv.on('plotly_relayout', function (relayoutData) {
+        const newCenter = relayoutData && relayoutData['mapbox.center'];
+        const newZoom = relayoutData && relayoutData['mapbox.zoom'];
+        if (newCenter && typeof newZoom === 'number') {
+          currentViewRef.current = { lat: newCenter.lat, lon: newCenter.lon, zoom: newZoom };
+        }
       });
 
       // Re-scale the heat map's radius live as the viewer zooms, so it
