@@ -459,6 +459,15 @@ function App() {
         colorscale: territoryColorscale,
         showscale: false,
         marker: { opacity: 0.4, line: { color: 'rgba(255,255,255,0.6)', width: 0.5 } },
+        // Lassoing dots also "selects" whichever zip shapes happen to
+        // fall inside the lasso (choroplethmapbox supports selection same
+        // as any other trace), which otherwise darkens just that shape
+        // relative to the rest of the map -- and since only the dots are
+        // meant to be the selection target, matching selected/unselected
+        // opacity to the base opacity keeps every shape's look the same
+        // regardless of what's currently selected.
+        selected: { marker: { opacity: 0.4 } },
+        unselected: { marker: { opacity: 0.4 } },
         text: choroplethText,
         hoverinfo: 'text',
         showlegend: false
@@ -583,6 +592,7 @@ function App() {
         ...(heatmapTrace ? [heatmapTrace] : [])
       ];
       const dotTraceIndex = plotData.indexOf(dotTrace);
+      const choroplethTraceIndex = choroplethTrace ? plotData.indexOf(choroplethTrace) : null;
 
       // Check if MapStyle is valid, if not, use the default value
       const validMapStyles = ['light', 'dark', 'streets', 'outdoors', 'satellite', 'satellite-streets'];
@@ -644,6 +654,15 @@ function App() {
       // times over with increasingly stale closures.
       graphDiv.removeAllListeners();
 
+      // Resets Plotly's own selected/unselected styling on every
+      // selectable trace -- the dots (the actual selection target) and,
+      // as a backstop for older data where the selected/unselected
+      // opacity override above might not apply, the territory shapes.
+      function clearVisualSelection() {
+        const indices = [dotTraceIndex, choroplethTraceIndex].filter(i => i !== null);
+        Plotly.restyle(graphDiv, { selectedpoints: indices.map(() => null) }, indices);
+      }
+
       graphDiv.on('plotly_selected', function (eventData) {
         const selectedZipcodes = eventData && eventData.points
           ? eventData.points
@@ -662,13 +681,13 @@ function App() {
           // selection styling for that on its own, so it has to be reset
           // explicitly or the map stays visually stuck on the old
           // selection even though the filter variable is cleared below.
-          Plotly.restyle(graphDiv, { selectedpoints: [null] }, [dotTraceIndex]);
+          clearVisualSelection();
           setFilterZipcode(null);
         }
       });
 
       graphDiv.on('plotly_deselect', function () {
-        Plotly.restyle(graphDiv, { selectedpoints: [null] }, [dotTraceIndex]);
+        clearVisualSelection();
         setFilterZipcode(null);
       });
 
