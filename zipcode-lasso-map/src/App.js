@@ -759,14 +759,23 @@ function App() {
 
       // Remember the viewer's pan/zoom as they move around, so a later
       // redraw (see currentViewRef above) can restore it instead of
-      // resetting to the configured default view.
-      graphDiv.on('plotly_relayout', function (relayoutData) {
+      // resetting to the configured default view. Tracked via both
+      // plotly_relayout (fires once, after a pan/zoom/animated button-zoom
+      // settles) and plotly_relayouting (fires continuously *during* a
+      // drag or an in-progress zoom animation) -- relying on
+      // plotly_relayout alone leaves a window, for as long as a zoom
+      // animation is still easing, where a data-driven redraw landing
+      // then would still see the pre-zoom view and reset back to it
+      // before the animation ever gets to finish and report its result.
+      function trackCurrentView(relayoutData) {
         const newCenter = relayoutData && relayoutData['mapbox.center'];
         const newZoom = relayoutData && relayoutData['mapbox.zoom'];
         if (newCenter && typeof newZoom === 'number') {
           currentViewRef.current = { lat: newCenter.lat, lon: newCenter.lon, zoom: newZoom };
         }
-      });
+      }
+      graphDiv.on('plotly_relayout', trackCurrentView);
+      graphDiv.on('plotly_relayouting', trackCurrentView);
 
       // Re-scale the heat map's radius live as the viewer zooms, so it
       // stays roughly confined to each zip instead of bleeding into its
