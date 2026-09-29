@@ -104,12 +104,16 @@ function variableLabel(v) {
   if (v === null || v === undefined) return '';
   if (typeof v === 'string') return v;
   if (typeof v === 'object') {
-    // Deliberately does NOT fall back to v.name: on at least one real
-    // control variable type, that held the variable's own internal name
-    // (e.g. "cMapLOB") rather than its selected value, which is worse
-    // than showing nothing -- a wrong label reads as correct.
     if (typeof v.value === 'string') return v.value;
     if (typeof v.label === 'string') return v.label;
+    // The shape actually seen from a Sigma value-selector control:
+    // {name: "cMapLOB", defaultValue: {type: "text", value: "SA"}} --
+    // note v.name here is the variable's own internal identifier, not
+    // its selected value (confusingly, despite the name, defaultValue
+    // holds the *current* value, not a separate fallback default).
+    if (v.defaultValue && typeof v.defaultValue === 'object' && typeof v.defaultValue.value === 'string') {
+      return v.defaultValue.value;
+    }
   }
   return '';
 }
@@ -267,13 +271,6 @@ function App() {
   // used to label the dot tooltip's metrics correctly.
   const [productLobRaw] = useVariable(config.productLob);
   const productLobLabel = variableLabel(productLobRaw);
-  // TEMPORARY diagnostic: variableLabel's guesses (value/label/name)
-  // aren't matching this control's real shape (it's returning the
-  // variable's own internal name, e.g. "cMapLOB", instead of the selected
-  // value). Logging the raw value so the actual shape can be seen in the
-  // browser console (F12) -- remove once that's confirmed.
-  // eslint-disable-next-line no-console
-  console.log('[DIAGNOSTIC] productLobRaw:', productLobRaw, 'JSON:', JSON.stringify(productLobRaw));
   const [prevSigmaData, setPrevSigmaData] = useState(null);
   const prevColumnsRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
