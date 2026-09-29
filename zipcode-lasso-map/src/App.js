@@ -273,6 +273,14 @@ function App() {
   const productLobLabel = variableLabel(productLobRaw);
   const [prevSigmaData, setPrevSigmaData] = useState(null);
   const prevColumnsRef = useRef(null);
+  // Tracks the labels the redraw below last actually used, so a control
+  // (heatmapMetric/productLob) that resolves asynchronously -- landing
+  // after sigmaData/columns have already settled once -- still triggers a
+  // redraw instead of leaving the plot permanently stuck on whatever those
+  // labels were (often empty) the one time the sigmaData/columns check
+  // below happened to pass.
+  const prevHeatmapMetricLabelRef = useRef(null);
+  const prevProductLobLabelRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
   const [renderTrigger, setRenderTrigger] = useState(0);
   const renderDebounceRef = useRef(null);
@@ -381,10 +389,14 @@ function App() {
       zctaByZip &&
       sigmaData &&
       (JSON.stringify(sigmaData) !== JSON.stringify(prevSigmaData) ||
-        columnsKey !== prevColumnsRef.current)
+        columnsKey !== prevColumnsRef.current ||
+        heatmapMetricLabel !== prevHeatmapMetricLabelRef.current ||
+        productLobLabel !== prevProductLobLabelRef.current)
     ) {
       setPrevSigmaData(sigmaData);
       prevColumnsRef.current = columnsKey;
+      prevHeatmapMetricLabelRef.current = heatmapMetricLabel;
+      prevProductLobLabelRef.current = productLobLabel;
 
       const graphDiv = document.getElementById('myDiv');
 
