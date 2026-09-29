@@ -94,13 +94,30 @@ function normalizeZip(rawZip) {
   return digits ? digits[0].padStart(5, '0').slice(0, 5) : null;
 }
 
+// Some Sigma control variable types (e.g. a value selector bound to a
+// column, as opposed to a button set) hand back an object like
+// {value: "SA", ...} rather than a plain string. Reduce either shape to a
+// plain string, so a label ends up empty or correct -- never literally
+// "[object Object]" -- regardless of which control type happens to be
+// wired to a given variable.
+function variableLabel(v) {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string') return v;
+  if (typeof v === 'object') {
+    if (typeof v.value === 'string') return v.value;
+    if (typeof v.label === 'string') return v.label;
+    if (typeof v.name === 'string') return v.name;
+  }
+  return '';
+}
+
 // The heat map metric picker is a Sigma variable set by a control (e.g. a
 // button set) the user builds elsewhere in the workbook -- it's expected to
 // hold one of these three labels, matched case-insensitively. "MM Opp" wins
 // on anything unrecognized (including the variable being unset), so the
 // heat map still shows something reasonable before a control is wired up.
 function metricKeyFromLabel(label) {
-  const normalized = String(label || '').trim().toLowerCase();
+  const normalized = variableLabel(label).trim().toLowerCase();
   if (normalized === 'mm sales') return 'mmSales';
   if (normalized === 'mtgs') return 'mtgs';
   return 'mmOpp';
@@ -231,14 +248,22 @@ function App() {
   // The current value is never read back -- this variable is write-only
   // from the plugin's side (set on lasso-select, cleared on deselect).
   const [, setFilterZipcode] = useVariable(config.filterZipcode);
-  // Set by a Sigma control (e.g. a button set) built elsewhere in the
-  // workbook -- the plugin only reads this, it never writes it.
-  const [heatmapMetric] = useVariable(config.heatmapMetric);
-  // Read-only, same as heatmapMetric: whichever Product LOB label (e.g.
-  // "SA", "FA") a Sigma control elsewhere in the workbook currently has
-  // selected. The source data is already filtered to that LOB upstream --
-  // this is only used to label the dot tooltip's metrics correctly.
-  const [productLob] = useVariable(config.productLob);
+  // Set by a Sigma control (e.g. a button set or a value selector) built
+  // elsewhere in the workbook -- the plugin only reads this, it never
+  // writes it. Reduced to a plain string immediately: some control types
+  // hand back an object here rather than a string, and that object can be
+  // a fresh reference on every render even when its value hasn't changed
+  // -- using the raw value as an effect dependency further down would then
+  // bypass the render debounce the same way an unstable config/columns
+  // reference did before.
+  const [heatmapMetricRaw] = useVariable(config.heatmapMetric);
+  const heatmapMetricLabel = variableLabel(heatmapMetricRaw);
+  // Read-only, same idea: whichever Product LOB label (e.g. "SA", "FA") a
+  // Sigma control elsewhere in the workbook currently has selected. The
+  // source data is already filtered to that LOB upstream -- this is only
+  // used to label the dot tooltip's metrics correctly.
+  const [productLobRaw] = useVariable(config.productLob);
+  const productLobLabel = variableLabel(productLobRaw);
   const [prevSigmaData, setPrevSigmaData] = useState(null);
   const prevColumnsRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
@@ -565,6 +590,12 @@ function App() {
       const dotZips = [];
       const dotLabels = [];
 
+      // Opp/Sales/Mkt Share are labeled with whatever Product LOB is
+      // currently selected (e.g. "SA MM Opp", "FA MM Opp") -- the
+      // underlying totals are already scoped to that LOB, since the source
+      // is filtered upstream by the same Sigma control.
+      const lobPrefix = productLobLabel ? `${productLobLabel} ` : '';
+
       zipAgg.forEach((agg, normZip) => {
         const entry = zctaByZip.get(normZip);
         dotLons.push(entry.lon);
@@ -580,11 +611,6 @@ function App() {
         headerParts.push(agg.territory);
         const cityState = [agg.city, agg.state].filter(Boolean).join(', ');
 
-        // Opp/Sales/Mkt Share are labeled with whatever Product LOB is
-        // currently selected (e.g. "SA MM Opp", "FA MM Opp") -- the
-        // underlying totals are already scoped to that LOB, since the
-        // source is filtered upstream by the same Sigma control.
-        const lobPrefix = productLob ? `${productLob} ` : '';
         const lines = [headerParts.join(' | ')];
         if (cityState) lines.push(cityState);
         if (mmOppCol) lines.push(`${lobPrefix}MM Opp: ${formatCurrencyAbbrev(agg.totals.mmOpp)}`);
@@ -633,7 +659,7 @@ function App() {
       let heatmapTrace = null;
       let baseHeatmapRadius = DEFAULT_HEATMAP_RADIUS;
       if (config.ShowHeatmap && (mmOppCol || mmSalesCol || mtgsCol)) {
-        const metricKey = metricKeyFromLabel(heatmapMetric);
+        const metricKey = metricKeyFromLabel(heatmapMetricLabel);
         const heatLons = [];
         const heatLats = [];
         const heatWeights = [];
@@ -843,7 +869,7 @@ function App() {
     // effect on its own the moment a newer tick lands, independently of
     // (and bypassing) the debounce.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderTrigger, heatmapMetric, mapboxAccessToken, setFilterZipcode, zctaByZip]);
+  }, [renderTrigger, heatmapMetricLabel, productLobLabel, mapboxAccessToken, setFilterZipcode, zctaByZip]);
 
   return (
     <div id='myDiv'></div>
