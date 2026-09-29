@@ -58,9 +58,24 @@ function assignColors(names) {
   return colorByName;
 }
 
-function formatNumber(n) {
-  if (!Number.isFinite(n)) return '0';
-  return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
+// Abbreviated currency for the dot tooltip's Opp/Sales figures (e.g.
+// "$57M", "$10M") -- these are large enough in practice that the full
+// unabbreviated number would be harder to scan at a glance.
+function formatCurrencyAbbrev(n) {
+  if (!Number.isFinite(n)) return '$0';
+  const sign = n < 0 ? '-' : '';
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(1).replace(/\.0$/, '')}B`;
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(1).replace(/\.0$/, '')}M`;
+  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1).replace(/\.0$/, '')}K`;
+  return `${sign}$${abs.toFixed(0)}`;
+}
+
+// Market share = MM Sales / MM Opp. Undefined (rather than a misleading
+// 0%) when there's no Opp to take a share of.
+function formatMarketShare(sales, opp) {
+  if (!Number.isFinite(opp) || opp <= 0) return 'N/A';
+  return `${Math.round((sales / opp) * 100)}%`;
 }
 
 // Zip codes come from Sigma in whatever format the source column happens to
@@ -182,12 +197,16 @@ client.config.configureEditorPanel([
   { type: "column", name: "zipcode", source: "source", allowMultiple: false },
   { type: "column", name: "territory", source: "source", allowMultiple: false },
   { type: "column", name: "channel", source: "source", allowMultiple: false },
+  { type: "column", name: "fw", source: "source", allowMultiple: false },
+  { type: "column", name: "city", source: "source", allowMultiple: false },
+  { type: "column", name: "state", source: "source", allowMultiple: false },
   { type: "column", name: "mmOpp", source: "source", allowMultiple: false },
   { type: "column", name: "mmSales", source: "source", allowMultiple: false },
   { type: "column", name: "mtgs", source: "source", allowMultiple: false },
   { type: "column", name: "tooltipFields", source: "source", allowMultiple: true },
   { type: "variable", name: "filterZipcode" },
   { type: "variable", name: "heatmapMetric" },
+  { type: "variable", name: "productLob" },
   { name: "Variables", type: 'group' },
   { name: 'ShowLegend', source: "Variables", type: "toggle", defaultValue: true },
   { name: 'ShowHeatmap', source: "Variables", type: "toggle", defaultValue: false },
@@ -215,6 +234,11 @@ function App() {
   // Set by a Sigma control (e.g. a button set) built elsewhere in the
   // workbook -- the plugin only reads this, it never writes it.
   const [heatmapMetric] = useVariable(config.heatmapMetric);
+  // Read-only, same as heatmapMetric: whichever Product LOB label (e.g.
+  // "SA", "FA") a Sigma control elsewhere in the workbook currently has
+  // selected. The source data is already filtered to that LOB upstream --
+  // this is only used to label the dot tooltip's metrics correctly.
+  const [productLob] = useVariable(config.productLob);
   const [prevSigmaData, setPrevSigmaData] = useState(null);
   const prevColumnsRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
@@ -354,10 +378,13 @@ function App() {
         return;
       }
 
-      // The channel/metric columns are optional -- without them the plugin
-      // still works exactly as before (one shape+dot per zip, no
-      // per-channel breakdown, no heat map).
+      // The channel/metric/tooltip columns are all optional -- without
+      // them the plugin still works exactly as before (one shape+dot per
+      // zip, no per-channel totals, no heat map, a sparser dot tooltip).
       const channelCol = config.channel ? sigmaData[config.channel] : null;
+      const fwCol = config.fw ? sigmaData[config.fw] : null;
+      const cityCol = config.city ? sigmaData[config.city] : null;
+      const stateCol = config.state ? sigmaData[config.state] : null;
       const mmOppCol = config.mmOpp ? sigmaData[config.mmOpp] : null;
       const mmSalesCol = config.mmSales ? sigmaData[config.mmSales] : null;
       const mtgsCol = config.mtgs ? sigmaData[config.mtgs] : null;
@@ -387,6 +414,9 @@ function App() {
             rawZip,
             firstIndex: index,
             territory: territory[index],
+            fw: fwCol ? fwCol[index] : null,
+            city: cityCol ? cityCol[index] : null,
+            state: stateCol ? stateCol[index] : null,
             channelTotals: new Map(),
             totals: { mmOpp: 0, mmSales: 0, mtgs: 0 }
           });
@@ -542,20 +572,26 @@ function App() {
         dotColors.push(colorByTerritory.get(agg.territory));
         dotZips.push(agg.rawZip);
 
-        const lines = [`<b>${agg.rawZip}</b> — ${agg.territory}`];
-        const sortedChannels = Array.from(agg.channelTotals.keys()).sort((a, b) =>
-          String(a).localeCompare(String(b))
-        );
-        sortedChannels.forEach(ch => {
-          const chTotal = agg.channelTotals.get(ch);
-          const parts = [];
-          if (mmOppCol) parts.push(`MM Opp: ${formatNumber(chTotal.mmOpp)}`);
-          if (mmSalesCol) parts.push(`MM Sales: ${formatNumber(chTotal.mmSales)}`);
-          if (mtgsCol) parts.push(`Mtgs: ${formatNumber(chTotal.mtgs)}`);
-          if (parts.length) {
-            lines.push(`${ch}: ${parts.join(', ')}`);
-          }
-        });
+        // Header: "{FW} | {Territory}" then "{City}, {State}" -- FW and
+        // territory are the rep and their assigned territory for this zip;
+        // city/state are omitted if those columns aren't configured.
+        const headerParts = [];
+        if (agg.fw) headerParts.push(agg.fw);
+        headerParts.push(agg.territory);
+        const cityState = [agg.city, agg.state].filter(Boolean).join(', ');
+
+        // Opp/Sales/Mkt Share are labeled with whatever Product LOB is
+        // currently selected (e.g. "SA MM Opp", "FA MM Opp") -- the
+        // underlying totals are already scoped to that LOB, since the
+        // source is filtered upstream by the same Sigma control.
+        const lobPrefix = productLob ? `${productLob} ` : '';
+        const lines = [headerParts.join(' | ')];
+        if (cityState) lines.push(cityState);
+        if (mmOppCol) lines.push(`${lobPrefix}MM Opp: ${formatCurrencyAbbrev(agg.totals.mmOpp)}`);
+        if (mmSalesCol) lines.push(`${lobPrefix}MM Sales: ${formatCurrencyAbbrev(agg.totals.mmSales)}`);
+        if (mmOppCol && mmSalesCol) {
+          lines.push(`${lobPrefix}MM Mkt Share: ${formatMarketShare(agg.totals.mmSales, agg.totals.mmOpp)}`);
+        }
         dotLabels.push(lines.join('<br>'));
       });
 

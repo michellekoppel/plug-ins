@@ -88,11 +88,14 @@ When you add this plugin to a Sigma workbook, the editor panel exposes:
 | `source` | Element | The Sigma element supplying the data to plot. |
 | `zipcode` | Column | The 5-digit zip code for each row. |
 | `territory` | Column | The value used to color each zip's shape and dot (e.g. sales territory, region). Expected to be the same for every row of a given zip. |
-| `channel` | Column | Optional. Groups the per-zip tooltip breakdown (e.g. `FI`, `IP`, `RW`). See below. |
+| `channel` | Column | Optional. Groups rows for summing per zip (e.g. `FI`, `IP`, `RW`) -- no longer shown in the dot tooltip, but still folded into each zip's totals. See below. |
+| `fw` | Column | Optional. The rep/FW name shown in the dot tooltip's header. |
+| `city` / `state` | Column | Optional. Shown in the dot tooltip under the header. |
 | `mmOpp` / `mmSales` / `mtgs` | Column | Optional. Numeric columns summed per zip (and per channel, if `channel` is set) for the tooltip and heat map. |
 | `tooltipFields` | Column (multiple) | Extra columns to show when hovering over a territory's shape (e.g. rep name, quota). Treated as per-territory attributes — shows the first non-empty value found among that territory's rows, not an aggregate across all its zips. |
 | `filterZipcode` | Control variable | The variable the plugin writes selected zip codes to, comma-separated. |
 | `heatmapMetric` | Control variable | Read-only from the plugin's side — bind a Sigma control (e.g. a button set) elsewhere in the workbook to this variable so viewers can switch the heat map between `MM Opp`, `MM Sales`, and `Mtgs` live. See below. |
+| `productLob` | Control variable | Read-only, same as `heatmapMetric`. Whichever Product LOB label (e.g. `SA`, `FA`) a Sigma control elsewhere in the workbook currently has selected -- used only to label the dot tooltip's Opp/Sales/Mkt Share lines (e.g. `SA MM Opp`). The source is expected to already be filtered to that LOB upstream by the same control. |
 | `ShowLegend` | Toggle | Show/hide the map legend. Default: on. |
 | `ShowHeatmap` | Toggle | Show/hide the heat map layer. Default: off. |
 | `HeatmapRadius` | Text | Heat map point radius in pixels, at a regional zoom level or wider. Shrinks automatically as you zoom in further (see below). Default: `30`. |
@@ -106,16 +109,23 @@ The source element can have multiple rows per zip code — e.g. one row per
 `channel` per zip, or more (the plugin doesn't care how many rows share a
 zip, or why). All rows sharing a zip code are folded together:
 
-- **Territory** is taken from the first row seen for that zip (it's expected
-  to be constant per zip, not aggregated).
-- **`mmOpp` / `mmSales` / `mtgs`** are **summed**, both per `channel` (for
-  the dot's hover tooltip) and overall per zip (for the heat map). If
-  `channel` isn't configured, the tooltip just shows each zip's totals with
-  no breakdown.
-- Zip code and territory are still required; `channel`, `mmOpp`, `mmSales`,
-  and `mtgs` are all optional and independent — configure whichever ones
-  your data has. Without any of the three metric columns, the heat map has
-  nothing to draw from and stays off regardless of `ShowHeatmap`.
+- **Territory**, **`fw`**, **`city`**, and **`state`** are all taken from the
+  first row seen for that zip (each is expected to be constant per zip, not
+  aggregated).
+- **`mmOpp` / `mmSales` / `mtgs`** are **summed** across every row sharing a
+  zip (regardless of `channel`) for both the dot tooltip and the heat map.
+- Zip code and territory are still required; `channel`, `fw`, `city`,
+  `state`, `mmOpp`, `mmSales`, and `mtgs` are all optional and independent —
+  configure whichever ones your data has. Without any of the three metric
+  columns, the heat map has nothing to draw from and stays off regardless of
+  `ShowHeatmap`.
+
+The dot tooltip reads, in order: `{fw} | {territory}`, then `{city}, {state}`
+(omitted if neither is configured), then `{productLob} MM Opp`,
+`{productLob} MM Sales`, and `{productLob} MM Mkt Share` (MM Sales ÷ MM Opp,
+`N/A` if there's no Opp to take a share of) for whichever of those metric
+columns are configured. The `productLob` prefix is omitted if that variable
+isn't set.
 
 The heat map (a Plotly `densitymapbox` layer) is drawn on top of the
 territory shapes but below the zip centroid dots, weighted by each zip's
