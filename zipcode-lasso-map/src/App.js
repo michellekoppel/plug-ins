@@ -1,11 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist';
 import './App.css';
 import {
   client,
   useConfig,
   useElementColumns,
-  useIncrementalElementData,
+  useElementData,
   useVariable,
 } from "@sigmacomputing/plugin";
 
@@ -146,13 +146,12 @@ const DEFAULT_HEATMAP_RADIUS = 20;
 // end to fully transparent lets the map underneath show through wherever
 // there isn't real density, so only the actual hot spots read as blobs.
 const HEATMAP_COLORSCALE = [
-  [0, 'rgba(0,0,255,0)'],
-  [0.15, 'rgba(0,0,255,0.55)'],
-  [0.35, 'rgba(0,200,255,0.65)'],
-  [0.55, 'rgba(0,220,120,0.7)'],
-  [0.7, 'rgba(255,235,0,0.8)'],
-  [0.85, 'rgba(255,140,0,0.85)'],
-  [1, 'rgba(230,20,20,0.9)']
+  [0, 'rgba(0,200,120,0)'],
+  [0.15, 'rgba(0,200,120,0.45)'],
+  [0.4, 'rgba(173,220,40,0.6)'],
+  [0.6, 'rgba(255,221,0,0.75)'],
+  [0.8, 'rgba(255,140,0,0.85)'],
+  [1, 'rgba(220,20,20,0.95)']
 ];
 
 // densitymapbox's radius is a constant number of screen pixels, which
@@ -250,7 +249,20 @@ function App() {
   // product line, etc.) can run past that easily, so
   // useIncrementalElementData (no row cap, fetched in chunks via
   // loadMoreData) is used instead to make sure every row makes it through.
-  const [sigmaData, loadMoreData, dataInfo] = useIncrementalElementData(config.source);
+  // TEMP EXPERIMENT -- the host answers the incremental subscription with an
+  // empty terminal chunk (rowCount 0, isComplete true) even though the element
+  // has rows and its columns subscription returns all 21 of them. Swapping to
+  // the plain (non-incremental) subscription isolates whether incremental
+  // delivery mode specifically is the problem. useElementData caps at 25k rows,
+  // which covers this source's ~8k. Revert to useIncrementalElementData if this
+  // turns out not to be the cause.
+  const sigmaData = useElementData(config.source);
+  const rowCount = useMemo(
+    () => Object.values(sigmaData || {}).reduce((max, col) => Math.max(max, (col && col.length) || 0), 0),
+    [sigmaData]
+  );
+  const dataInfo = useMemo(() => ({ rowCount, isComplete: true }), [rowCount]);
+  const loadMoreData = useCallback(() => {}, []);
   const columns = useElementColumns(config.source);
   // The current value is never read back -- this variable is write-only
   // from the plugin's side (set on lasso-select, cleared on deselect).
@@ -282,6 +294,10 @@ function App() {
   const prevHeatmapMetricLabelRef = useRef(null);
   const prevProductLobLabelRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
+  // Surfaced over the map when the plugin can't draw (no rows from the source,
+  // or required columns unbound) -- otherwise those cases are a silent blank
+  // map that reads as a hang.
+  const [statusMessage, setStatusMessage] = useState(null);
   const [renderTrigger, setRenderTrigger] = useState(0);
   const renderDebounceRef = useRef(null);
   // Tracks the viewer's current pan/zoom (updated live via plotly_relayout
@@ -292,6 +308,14 @@ function App() {
   // data changes (e.g. every zip reassignment in a live editing tool).
   const currentViewRef = useRef(null);
   const lastSeenContentKeyRef = useRef(null);
+
+  // TEMP DIAGNOSTIC -- remove once the empty-source issue is resolved.
+  useEffect(() => {
+    console.log('[diag] source:', config.source,
+      '| dataInfo:', JSON.stringify(dataInfo),
+      '| column ids from useElementColumns:', Object.keys(columns || {}),
+      '| sigmaData keys:', Object.keys(sigmaData || {}));
+  }, [config.source, dataInfo, columns, sigmaData]);
 
   // Keep requesting the next chunk until the host reports every row has
   // been delivered.
@@ -366,6 +390,8 @@ function App() {
 
   useEffect(() => {
     const updatePlotSize = () => {
+      const graphDiv = document.getElementById('myDiv');
+      if (!graphDiv || !graphDiv.data) return;
       const width = window.innerWidth;
       const height = window.innerHeight;
       Plotly.relayout('myDiv', { width: width, height: height });
@@ -393,11 +419,6 @@ function App() {
         heatmapMetricLabel !== prevHeatmapMetricLabelRef.current ||
         productLobLabel !== prevProductLobLabelRef.current)
     ) {
-      setPrevSigmaData(sigmaData);
-      prevColumnsRef.current = columnsKey;
-      prevHeatmapMetricLabelRef.current = heatmapMetricLabel;
-      prevProductLobLabelRef.current = productLobLabel;
-
       const graphDiv = document.getElementById('myDiv');
 
       // If a lasso selection is active when this effect re-runs (e.g. a
@@ -418,9 +439,24 @@ function App() {
       const zip = sigmaData[config.zipcode];
       const territory = sigmaData[config.territory];
 
+      // Bailing here must not record anything as "seen": the bookkeeping
+      // below is what gates this effect, so consuming the change that
+      // triggered this run would leave the map blank until something else
+      // happened to change.
       if (!zip || !territory) {
+        setStatusMessage(
+          dataInfo.rowCount === 0
+            ? 'No rows returned from the source element.'
+            : 'Select a zip code column and a territory column.'
+        );
         return;
       }
+      setStatusMessage(null);
+
+      setPrevSigmaData(sigmaData);
+      prevColumnsRef.current = columnsKey;
+      prevHeatmapMetricLabelRef.current = heatmapMetricLabel;
+      prevProductLobLabelRef.current = productLobLabel;
 
       // The channel/metric/tooltip columns are all optional -- without
       // them the plugin still works exactly as before (one shape+dot per
@@ -445,7 +481,6 @@ function App() {
       // is still counted once, matching what the note says.
       const zipAgg = new Map();
       const unmatchedZips = new Set();
-
       zip.forEach((rawZip, index) => {
         const normZip = normalizedZip[index];
         if (!zctaByZip.has(normZip)) {
@@ -578,7 +613,7 @@ function App() {
         zmax: territoryCount,
         colorscale: territoryColorscale,
         showscale: false,
-        marker: { opacity: 0.4, line: { color: 'rgba(255,255,255,0.6)', width: 0.5 } },
+        marker: { opacity: .2, line: { color: 'rgba(0,0,0,0.8)', width: 0.75 } },
         text: choroplethText,
         hoverinfo: 'text',
         showlegend: false
@@ -646,7 +681,7 @@ function App() {
         name: 'Zip codes',
         lon: dotLons,
         lat: dotLats,
-        marker: { size: 4, color: dotColors },
+        marker: { size: 4, color: dotColors , opacity: .1},
         customdata: dotZips,
         text: dotLabels,
         hovertemplate: '%{text}<extra></extra>',
@@ -891,7 +926,25 @@ function App() {
   }, [renderTrigger, heatmapMetricLabel, productLobLabel, mapboxAccessToken, setFilterZipcode, zctaByZip]);
 
   return (
-    <div id='myDiv'></div>
+    <>
+      <div id='myDiv'></div>
+      {statusMessage && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '0 24px',
+          textAlign: 'center',
+          font: '14px/1.5 system-ui, -apple-system, sans-serif',
+          color: '#555',
+          pointerEvents: 'none'
+        }}>
+          {statusMessage}
+        </div>
+      )}
+    </>
   );
 }
 
