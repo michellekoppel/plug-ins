@@ -1,11 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist';
 import './App.css';
 import {
   client,
   useConfig,
   useElementColumns,
-  useElementData,
+  useIncrementalElementData,
   useVariable,
 } from "@sigmacomputing/plugin";
 
@@ -192,6 +192,29 @@ function outerRings(geometry) {
   return [];
 }
 
+// Some zips in the bundled dataset have a centroid but no boundary polygon
+// (e.g. PO-box-only or single-organization zip codes with no ZCTA at all).
+// Without this, those zips would render as an invisible gap in an otherwise
+// filled territory even though they're valid rows in the source data. Draw
+// a small square centered on the centroid instead, so there's at least a
+// visible patch of color rather than an unexplained hole.
+const FALLBACK_SHAPE_RADIUS_DEG = 0.025;
+
+function ringsForZip(entry) {
+  if (entry.rings.length) {
+    return entry.rings;
+  }
+  const { lat, lon } = entry;
+  const r = FALLBACK_SHAPE_RADIUS_DEG;
+  return [[
+    [lon - r, lat - r],
+    [lon - r, lat + r],
+    [lon + r, lat + r],
+    [lon + r, lat - r],
+    [lon - r, lat - r]
+  ]];
+}
+
 // Plotly's densitymapbox emits heatmap-radius as a flat pixel constant and
 // never sets heatmap-intensity at all, so it stays at Mapbox's default of 1.
 // Zooming in therefore spreads the same points across more pixels, collapsing
@@ -238,10 +261,6 @@ function applyHeatmapIntensity(graphDiv, heatmapTraceIndex) {
   }
 }
 
-// useElementData silently truncates past this, which would quietly drop rows
-// rather than fail, so it's surfaced on the map instead of left to chance.
-const SOURCE_ROW_LIMIT = 25000;
-
 client.config.configureEditorPanel([
   { type: "element", name: "source" },
   { type: "column", name: "zipcode", source: "source", allowMultiple: false },
@@ -271,18 +290,12 @@ client.config.configureEditorPanel([
 function App() {
   const config = useConfig();
   const mapboxAccessToken = config.MapboxAccessToken;
-  // useIncrementalElementData is the natural fit here (no row cap, delivered
-  // in chunks) and is what this used to call, but this host answers the
-  // incremental subscription with an empty terminal chunk -- rowCount 0,
-  // isComplete true -- while the very same element's columns subscription
-  // returns every column. That leaves the plugin stranded on a blank map with
-  // nothing logged. The plain subscription works; the price is a hard
-  // SOURCE_ROW_LIMIT the host truncates at without saying so.
-  const sigmaData = useElementData(config.source);
-  const rowCount = useMemo(
-    () => Object.values(sigmaData || {}).reduce((max, col) => Math.max(max, (col && col.length) || 0), 0),
-    [sigmaData]
-  );
+  // useElementData caps out at 25,000 rows and silently truncates anything
+  // past that -- a source with multiple rows per zip (one per channel,
+  // product line, etc.) can run past that easily, so
+  // useIncrementalElementData (no row cap, fetched in chunks via
+  // loadMoreData) is used instead to make sure every row makes it through.
+  const [sigmaData, loadMoreData, dataInfo] = useIncrementalElementData(config.source);
   const columns = useElementColumns(config.source);
   // The current value is never read back -- this variable is write-only
   // from the plugin's side (set on lasso-select, cleared on deselect).
@@ -314,10 +327,6 @@ function App() {
   const prevHeatmapMetricLabelRef = useRef(null);
   const prevProductLobLabelRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
-  // Surfaced over the map when the plugin can't draw (no rows from the source,
-  // or required columns unbound) -- otherwise those cases are a silent blank
-  // map that reads as a hang.
-  const [statusMessage, setStatusMessage] = useState(null);
   const [renderTrigger, setRenderTrigger] = useState(0);
   const renderDebounceRef = useRef(null);
   // Tracks the viewer's current pan/zoom (updated live via plotly_relayout
@@ -328,6 +337,14 @@ function App() {
   // data changes (e.g. every zip reassignment in a live editing tool).
   const currentViewRef = useRef(null);
   const lastSeenContentKeyRef = useRef(null);
+
+  // Keep requesting the next chunk until the host reports every row has
+  // been delivered.
+  useEffect(() => {
+    if (config.source && !dataInfo.isComplete) {
+      loadMoreData();
+    }
+  }, [config.source, dataInfo.isComplete, dataInfo.rowCount, loadMoreData]);
 
   // Coalesces a burst of rapid source updates (e.g. while a user is
   // actively dragging zips between territories in a reassignment tool)
@@ -394,8 +411,6 @@ function App() {
 
   useEffect(() => {
     const updatePlotSize = () => {
-      const graphDiv = document.getElementById('myDiv');
-      if (!graphDiv || !graphDiv.data) return;
       const width = window.innerWidth;
       const height = window.innerHeight;
       Plotly.relayout('myDiv', { width: width, height: height });
@@ -423,6 +438,11 @@ function App() {
         heatmapMetricLabel !== prevHeatmapMetricLabelRef.current ||
         productLobLabel !== prevProductLobLabelRef.current)
     ) {
+      setPrevSigmaData(sigmaData);
+      prevColumnsRef.current = columnsKey;
+      prevHeatmapMetricLabelRef.current = heatmapMetricLabel;
+      prevProductLobLabelRef.current = productLobLabel;
+
       const graphDiv = document.getElementById('myDiv');
 
       // If a lasso selection is active when this effect re-runs (e.g. a
@@ -443,24 +463,9 @@ function App() {
       const zip = sigmaData[config.zipcode];
       const territory = sigmaData[config.territory];
 
-      // Bailing here must not record anything as "seen": the bookkeeping
-      // below is what gates this effect, so consuming the change that
-      // triggered this run would leave the map blank until something else
-      // happened to change.
       if (!zip || !territory) {
-        setStatusMessage(
-          rowCount === 0
-            ? 'No rows returned from the source element.'
-            : 'Select a zip code column and a territory column.'
-        );
         return;
       }
-      setStatusMessage(null);
-
-      setPrevSigmaData(sigmaData);
-      prevColumnsRef.current = columnsKey;
-      prevHeatmapMetricLabelRef.current = heatmapMetricLabel;
-      prevProductLobLabelRef.current = productLobLabel;
 
       // The channel/metric/tooltip columns are all optional -- without
       // them the plugin still works exactly as before (one shape+dot per
@@ -485,6 +490,7 @@ function App() {
       // is still counted once, matching what the note says.
       const zipAgg = new Map();
       const unmatchedZips = new Set();
+
       zip.forEach((rawZip, index) => {
         const normZip = normalizedZip[index];
         if (!zctaByZip.has(normZip)) {
@@ -531,13 +537,6 @@ function App() {
         console.warn(
           `Zip Code Lasso Map: ${unmappedCount} distinct zip value(s) did not match the boundary dataset. First 20:`,
           Array.from(unmatchedZips).slice(0, 20)
-        );
-      }
-
-      const sourceTruncated = rowCount >= SOURCE_ROW_LIMIT;
-      if (sourceTruncated) {
-        console.warn(
-          `Zip Code Lasso Map: source hit the ${SOURCE_ROW_LIMIT}-row limit, so rows are being dropped. Aggregate the source further upstream.`
         );
       }
 
@@ -593,14 +592,7 @@ function App() {
       const choroplethText = [];
 
       zipAgg.forEach((agg, normZip) => {
-        // Zips with a centroid but no ZCTA boundary (PO-box-only,
-        // single-organization, military-base) contribute a centroid dot below
-        // and no shape here. The placeholder square this used to draw invented
-        // ~5km of footprint per zip, and since those zip types cluster
-        // downtown the squares stacked into a dark blob that read as a hotspot
-        // when it only ever meant "no boundary for this zip".
-        const rings = zctaByZip.get(normZip).rings;
-        if (!rings.length) return;
+        const rings = ringsForZip(zctaByZip.get(normZip));
         choroplethFeatures.push({
           type: 'Feature',
           id: normZip,
@@ -631,7 +623,7 @@ function App() {
         zmax: territoryCount,
         colorscale: territoryColorscale,
         showscale: false,
-        marker: { opacity: .2, line: { color: 'rgba(0,0,0,0.8)', width: 0.75 } },
+        marker: { opacity: 0.2, line: { color: 'rgba(0,0,0,0.8)', width: 0.75 } },
         text: choroplethText,
         hoverinfo: 'text',
         showlegend: false
@@ -699,7 +691,7 @@ function App() {
         name: 'Zip codes',
         lon: dotLons,
         lat: dotLats,
-        marker: { size: 4, color: dotColors , opacity: .1},
+        marker: { size: 4, color: dotColors, opacity: 0.1 },
         customdata: dotZips,
         text: dotLabels,
         hovertemplate: '%{text}<extra></extra>',
@@ -777,15 +769,6 @@ function App() {
       const validMapStyles = ['light', 'dark', 'streets', 'outdoors', 'satellite', 'satellite-streets'];
       const mapStyle = validMapStyles.includes(config.MapStyle) ? config.MapStyle : 'light';
 
-      // Bottom-right notes, stacked upward in order.
-      const mapNotes = [];
-      if (unmappedCount > 0) {
-        mapNotes.push(`${unmappedCount} zip code${unmappedCount === 1 ? '' : 's'} not shown`);
-      }
-      if (sourceTruncated) {
-        mapNotes.push(`Source truncated at ${SOURCE_ROW_LIMIT.toLocaleString()} rows`);
-      }
-
       const layout = {
         dragmode: 'lasso',
         mapbox: {
@@ -817,18 +800,18 @@ function App() {
           font: { color: 'white' },
           visible: config.ShowLegend
         },
-        annotations: mapNotes.map((text, i) => ({
-          text,
+        annotations: unmappedCount > 0 ? [{
+          text: `${unmappedCount} zip code${unmappedCount === 1 ? '' : 's'} not shown`,
           showarrow: false,
           xref: 'paper',
           yref: 'paper',
           x: 0.99,
-          y: 0.02 + i * 0.05,
+          y: 0.02,
           xanchor: 'right',
           yanchor: 'bottom',
           font: { size: 11, color: '#ccc' },
           bgcolor: 'rgba(0,0,0,0.5)'
-        }))
+        }] : []
       };
 
       Plotly.setPlotConfig({ mapboxAccessToken: mapboxAccessToken });
@@ -957,25 +940,7 @@ function App() {
   }, [renderTrigger, heatmapMetricLabel, productLobLabel, mapboxAccessToken, setFilterZipcode, zctaByZip]);
 
   return (
-    <>
-      <div id='myDiv'></div>
-      {statusMessage && (
-        <div style={{
-          position: 'fixed',
-          inset: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: '0 24px',
-          textAlign: 'center',
-          font: '14px/1.5 system-ui, -apple-system, sans-serif',
-          color: '#555',
-          pointerEvents: 'none'
-        }}>
-          {statusMessage}
-        </div>
-      )}
-    </>
+    <div id='myDiv'></div>
   );
 }
 

@@ -65,11 +65,8 @@ The plugin fetches this once per session (not bundled into the JS itself)
 and looks up rows from your Sigma data against it by 5-digit zip code (zip
 values are normalized first — a numeric column, a ZIP+4 suffix, or stray
 whitespace won't break the match). A zip with no boundary polygon (from
-either source above) is drawn as its centroid dot only, with no filled shape —
-it stays hoverable and lasso-selectable, but no footprint is invented for it.
-(These are disproportionately PO-box and single-organization zips, which
-cluster in city centers, so drawing placeholder shapes for them stacked into a
-dark blob that read as a hotspot.)
+either source above) renders as a small square at its centroid instead of a
+full shape, so it's still visible on the map even without a real outline.
 
 Zip codes with no entry in this dataset at all are skipped and counted in a
 "N zip codes not shown" note in the bottom-right corner of the map, mirroring
@@ -81,20 +78,6 @@ literally gap-free nationwide coverage over that unpopulated land (as
 Sigma's built-in region map does) would require a licensed commercial
 zip-boundary dataset, which isn't available through a public Mapbox access
 token.
-
-## Source size limit
-
-The plugin reads its source through Sigma's plain (non-incremental) element
-subscription, which caps out at **25,000 rows** and truncates silently past
-that. If the source reaches that limit the map shows a "Source truncated at
-25,000 rows" note in the bottom-right corner and logs a warning — aggregate
-further upstream if you hit it.
-
-The incremental subscription (`useIncrementalElementData`) has no such cap and
-was used originally, but at least one host answers it with an empty terminal
-chunk — reporting zero rows as complete while the same element's column
-subscription returns every column — which leaves the plugin on a permanently
-blank map. If that's ever fixed host-side, switching back lifts the row cap.
 
 ## Configuration
 
