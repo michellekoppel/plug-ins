@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Plotly from 'plotly.js-dist';
 import './App.css';
 import {
@@ -192,28 +192,55 @@ function outerRings(geometry) {
   return [];
 }
 
-// Some zips in the bundled dataset have a centroid but no boundary polygon
-// (e.g. PO-box-only or single-organization zip codes with no ZCTA at all).
-// Without this, those zips would render as an invisible gap in an otherwise
-// filled territory even though they're valid rows in the source data. Draw
-// a small square centered on the centroid instead, so there's at least a
-// visible patch of color rather than an unexplained hole.
-const FALLBACK_SHAPE_RADIUS_DEG = 0.025;
+// Plotly's densitymapbox emits heatmap-radius as a flat pixel constant and
+// never sets heatmap-intensity at all, so it stays at Mapbox's default of 1.
+// Zooming in therefore spreads the same points across more pixels, collapsing
+// the per-pixel density sum and sliding the whole heat map toward the cool end
+// of the colorscale. Mapbox's own remedy is a zoom-interpolated intensity,
+// which Plotly exposes no attribute for -- so it gets set directly on the
+// layer Plotly manages. Deliberately a separate knob from radiusForZoom:
+// radius stays small when zoomed in so a zip's heat stays inside that zip,
+// while intensity buys back the color that shrinking costs.
+const HEATMAP_INTENSITY_BY_ZOOM = [
+  'interpolate', ['linear'], ['zoom'],
+  4, 1,
+  8, 1.5,
+  11, 4,
+  14, 10,
+  16, 18
+];
 
-function ringsForZip(entry) {
-  if (entry.rings.length) {
-    return entry.rings;
+// Reaches past Plotly's public API into the Mapbox layer underneath it, so
+// every hop is guarded: if a Plotly upgrade moves any of this, the cost should
+// be a flat heat map, never a thrown error.
+function applyHeatmapIntensity(graphDiv, heatmapTraceIndex) {
+  try {
+    const fullLayout = graphDiv && graphDiv._fullLayout;
+    const subplot = fullLayout && fullLayout.mapbox && fullLayout.mapbox._subplot;
+    const map = subplot && subplot.map;
+    if (!map || typeof map.setPaintProperty !== 'function') return;
+
+    const fullData = graphDiv._fullData;
+    const trace = fullData && fullData[heatmapTraceIndex];
+    let layerId = trace && trace.uid ? `plotly-trace-layer-${trace.uid}-heatmap` : null;
+
+    if (!layerId || !map.getLayer(layerId)) {
+      const style = typeof map.getStyle === 'function' ? map.getStyle() : null;
+      const layers = (style && style.layers) || [];
+      const match = layers.find(l => /^plotly-trace-layer-.*-heatmap$/.test(l.id));
+      layerId = match ? match.id : null;
+    }
+    if (!layerId || !map.getLayer(layerId)) return;
+
+    map.setPaintProperty(layerId, 'heatmap-intensity', HEATMAP_INTENSITY_BY_ZOOM);
+  } catch (err) {
+    // Non-fatal -- the heat map still draws, just without zoom compensation.
   }
-  const { lat, lon } = entry;
-  const r = FALLBACK_SHAPE_RADIUS_DEG;
-  return [[
-    [lon - r, lat - r],
-    [lon - r, lat + r],
-    [lon + r, lat + r],
-    [lon + r, lat - r],
-    [lon - r, lat - r]
-  ]];
 }
+
+// useElementData silently truncates past this, which would quietly drop rows
+// rather than fail, so it's surfaced on the map instead of left to chance.
+const SOURCE_ROW_LIMIT = 25000;
 
 client.config.configureEditorPanel([
   { type: "element", name: "source" },
@@ -244,25 +271,18 @@ client.config.configureEditorPanel([
 function App() {
   const config = useConfig();
   const mapboxAccessToken = config.MapboxAccessToken;
-  // useElementData caps out at 25,000 rows and silently truncates anything
-  // past that -- a source with multiple rows per zip (one per channel,
-  // product line, etc.) can run past that easily, so
-  // useIncrementalElementData (no row cap, fetched in chunks via
-  // loadMoreData) is used instead to make sure every row makes it through.
-  // TEMP EXPERIMENT -- the host answers the incremental subscription with an
-  // empty terminal chunk (rowCount 0, isComplete true) even though the element
-  // has rows and its columns subscription returns all 21 of them. Swapping to
-  // the plain (non-incremental) subscription isolates whether incremental
-  // delivery mode specifically is the problem. useElementData caps at 25k rows,
-  // which covers this source's ~8k. Revert to useIncrementalElementData if this
-  // turns out not to be the cause.
+  // useIncrementalElementData is the natural fit here (no row cap, delivered
+  // in chunks) and is what this used to call, but this host answers the
+  // incremental subscription with an empty terminal chunk -- rowCount 0,
+  // isComplete true -- while the very same element's columns subscription
+  // returns every column. That leaves the plugin stranded on a blank map with
+  // nothing logged. The plain subscription works; the price is a hard
+  // SOURCE_ROW_LIMIT the host truncates at without saying so.
   const sigmaData = useElementData(config.source);
   const rowCount = useMemo(
     () => Object.values(sigmaData || {}).reduce((max, col) => Math.max(max, (col && col.length) || 0), 0),
     [sigmaData]
   );
-  const dataInfo = useMemo(() => ({ rowCount, isComplete: true }), [rowCount]);
-  const loadMoreData = useCallback(() => {}, []);
   const columns = useElementColumns(config.source);
   // The current value is never read back -- this variable is write-only
   // from the plugin's side (set on lasso-select, cleared on deselect).
@@ -308,22 +328,6 @@ function App() {
   // data changes (e.g. every zip reassignment in a live editing tool).
   const currentViewRef = useRef(null);
   const lastSeenContentKeyRef = useRef(null);
-
-  // TEMP DIAGNOSTIC -- remove once the empty-source issue is resolved.
-  useEffect(() => {
-    console.log('[diag] source:', config.source,
-      '| dataInfo:', JSON.stringify(dataInfo),
-      '| column ids from useElementColumns:', Object.keys(columns || {}),
-      '| sigmaData keys:', Object.keys(sigmaData || {}));
-  }, [config.source, dataInfo, columns, sigmaData]);
-
-  // Keep requesting the next chunk until the host reports every row has
-  // been delivered.
-  useEffect(() => {
-    if (config.source && !dataInfo.isComplete) {
-      loadMoreData();
-    }
-  }, [config.source, dataInfo.isComplete, dataInfo.rowCount, loadMoreData]);
 
   // Coalesces a burst of rapid source updates (e.g. while a user is
   // actively dragging zips between territories in a reassignment tool)
@@ -445,7 +449,7 @@ function App() {
       // happened to change.
       if (!zip || !territory) {
         setStatusMessage(
-          dataInfo.rowCount === 0
+          rowCount === 0
             ? 'No rows returned from the source element.'
             : 'Select a zip code column and a territory column.'
         );
@@ -530,6 +534,13 @@ function App() {
         );
       }
 
+      const sourceTruncated = rowCount >= SOURCE_ROW_LIMIT;
+      if (sourceTruncated) {
+        console.warn(
+          `Zip Code Lasso Map: source hit the ${SOURCE_ROW_LIMIT}-row limit, so rows are being dropped. Aggregate the source further upstream.`
+        );
+      }
+
       // Group unique zips by territory for the filled shapes.
       const zipsByTerritory = new Map();
       zipAgg.forEach((agg, normZip) => {
@@ -582,7 +593,14 @@ function App() {
       const choroplethText = [];
 
       zipAgg.forEach((agg, normZip) => {
-        const rings = ringsForZip(zctaByZip.get(normZip));
+        // Zips with a centroid but no ZCTA boundary (PO-box-only,
+        // single-organization, military-base) contribute a centroid dot below
+        // and no shape here. The placeholder square this used to draw invented
+        // ~5km of footprint per zip, and since those zip types cluster
+        // downtown the squares stacked into a dark blob that read as a hotspot
+        // when it only ever meant "no boundary for this zip".
+        const rings = zctaByZip.get(normZip).rings;
+        if (!rings.length) return;
         choroplethFeatures.push({
           type: 'Feature',
           id: normZip,
@@ -759,6 +777,15 @@ function App() {
       const validMapStyles = ['light', 'dark', 'streets', 'outdoors', 'satellite', 'satellite-streets'];
       const mapStyle = validMapStyles.includes(config.MapStyle) ? config.MapStyle : 'light';
 
+      // Bottom-right notes, stacked upward in order.
+      const mapNotes = [];
+      if (unmappedCount > 0) {
+        mapNotes.push(`${unmappedCount} zip code${unmappedCount === 1 ? '' : 's'} not shown`);
+      }
+      if (sourceTruncated) {
+        mapNotes.push(`Source truncated at ${SOURCE_ROW_LIMIT.toLocaleString()} rows`);
+      }
+
       const layout = {
         dragmode: 'lasso',
         mapbox: {
@@ -790,18 +817,18 @@ function App() {
           font: { color: 'white' },
           visible: config.ShowLegend
         },
-        annotations: unmappedCount > 0 ? [{
-          text: `${unmappedCount} zip code${unmappedCount === 1 ? '' : 's'} not shown`,
+        annotations: mapNotes.map((text, i) => ({
+          text,
           showarrow: false,
           xref: 'paper',
           yref: 'paper',
           x: 0.99,
-          y: 0.02,
+          y: 0.02 + i * 0.05,
           xanchor: 'right',
           yanchor: 'bottom',
           font: { size: 11, color: '#ccc' },
           bgcolor: 'rgba(0,0,0,0.5)'
-        }] : []
+        }))
       };
 
       Plotly.setPlotConfig({ mapboxAccessToken: mapboxAccessToken });
@@ -813,7 +840,11 @@ function App() {
       // couldn't keep up -- each rebuild has to reload map tiles from
       // scratch, so a fast stream of updates kept the map stuck showing
       // that brief "no tiles yet" black state instead of ever finishing.
-      Plotly.react('myDiv', plotData, layout, { displayModeBar: true });
+      Plotly.react('myDiv', plotData, layout, { displayModeBar: true }).then(() => {
+        if (heatmapTrace) {
+          applyHeatmapIntensity(document.getElementById('myDiv'), plotData.indexOf(heatmapTrace));
+        }
+      });
 
       // Re-apply the selection captured above (by zip identity, not
       // index -- the new dot order may differ) so a data refresh that
