@@ -18,7 +18,7 @@ const PALETTE = [
 
 const DEFAULT_CENTER = { lat: 39.8283, lon: -98.5795 };
 const DEFAULT_ZOOM = 3.3;
-const ZCTA_URL = `${process.env.PUBLIC_URL}/data/zcta.json`;
+const ZCTA_URL = `${process.env.PUBLIC_URL}/data/zcta.json?v=2`; // bump to bust caches when the dataset changes
 
 client.config.configureEditorPanel([
   { type: 'element', name: 'source' },
