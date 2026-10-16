@@ -19,3 +19,10 @@ html, body, #root { height: 100%; margin: 0; }
   font: 700 12px/1.25 ui-monospace, Menlo, monospace; color: #111;
   text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 2px #fff;
 }
+
+.zoom { position: absolute; right: 12px; bottom: 40px; z-index: 6; display: flex; flex-direction: column; gap: 6px; }
+.zoom button {
+  width: 36px; height: 36px; border: 0; border-radius: 6px; background: #fff; color: #222;
+  font: 400 22px/1 sans-serif; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.3);
+}
+.zoom button:hover { background: #f0f0f0; }

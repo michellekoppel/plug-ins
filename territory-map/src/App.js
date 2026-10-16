@@ -18,6 +18,8 @@ const PALETTE = [
 
 const DEFAULT_CENTER = { lat: 39.8283, lon: -98.5795 };
 const DEFAULT_ZOOM = 3.3;
+// Zoom levels at which labels gain detail (FW name, then Opp/Sales).
+const LABEL_DETAIL_ZOOMS = [4.6, 5.6];
 const ZCTA_URL = `${process.env.PUBLIC_URL}/data/zcta.json?v=2`; // bump to bust caches when the dataset changes
 
 client.config.configureEditorPanel([
@@ -81,6 +83,7 @@ function App() {
   const [error, setError] = useState(null);
   const plotRef = useRef(null);
   const overlayRef = useRef(null);
+  const mapRef = useRef(null);
   const labelsRef = useRef([]);
   const unbindRef = useRef(null);
 
@@ -193,12 +196,14 @@ function App() {
         const d = (p.lat - mLat) ** 2 + ((p.lon - mLon) * Math.cos(mLat * Math.PI / 180)) ** 2;
         if (d < bestD) { bestD = d; best = p; }
       });
-      const lines = [];
-      if (t.fw) lines.push(t.fw);
-      if (config.mmOpp) lines.push(money(t.opp));
-      if (config.mmSales) lines.push(money(t.sales));
-      lines.push(t.name);
-      labels.push({ lon: best.lon, lat: best.lat, lines });
+      // Lines per detail level: 0 = territory only, 1 = + FW name, 2 = everything.
+      const full = [];
+      if (t.fw) full.push(t.fw);
+      if (config.mmOpp) full.push(money(t.opp));
+      if (config.mmSales) full.push(money(t.sales));
+      full.push(t.name);
+      const levels = [[t.name], t.fw ? [t.fw, t.name] : [t.name], full];
+      labels.push({ lon: best.lon, lat: best.lat, levels });
     });
 
     const style = ['light', 'dark', 'streets', 'outdoors', 'satellite', 'satellite-streets'].includes(config.MapStyle)
@@ -227,21 +232,32 @@ function App() {
     const els = showLabels ? labels.map(l => {
       const el = document.createElement('div');
       el.className = 'tlabel';
-      l.lines.forEach(line => {
-        const row = document.createElement('div');
-        row.textContent = line;
-        el.appendChild(row);
-      });
       overlay.appendChild(el);
-      return { el, l };
+      return { el, l, level: -1 };
     }) : [];
-    Plotly.react(gd, traces, layout, { responsive: true, displaylogo: false, displayModeBar: false }).then(() => {
+    Plotly.react(gd, traces, layout, { responsive: true, displaylogo: false, displayModeBar: false, scrollZoom: true }).then(() => {
       const map = gd._fullLayout && gd._fullLayout.mapbox && gd._fullLayout.mapbox._subplot && gd._fullLayout.mapbox._subplot.map;
       if (!map || typeof map.project !== 'function') return;
-      const place = () => els.forEach(({ el, l }) => {
-        const pt = map.project([l.lon, l.lat]);
-        el.style.transform = `translate(${pt.x}px, ${pt.y}px) translate(-50%, -50%)`;
-      });
+      mapRef.current = map;
+      // Show more detail per label as you zoom in, so labels don't pile up
+      // on top of each other at national zoom.
+      const place = () => {
+        const z = map.getZoom();
+        const level = z < LABEL_DETAIL_ZOOMS[0] ? 0 : z < LABEL_DETAIL_ZOOMS[1] ? 1 : 2;
+        els.forEach(item => {
+          if (item.level !== level) {
+            item.level = level;
+            item.el.textContent = '';
+            item.l.levels[level].forEach(line => {
+              const row = document.createElement('div');
+              row.textContent = line;
+              item.el.appendChild(row);
+            });
+          }
+          const pt = map.project([item.l.lon, item.l.lat]);
+          item.el.style.transform = `translate(${pt.x}px, ${pt.y}px) translate(-50%, -50%)`;
+        });
+      };
       place();
       map.on('move', place);
       map.on('resize', place);
@@ -260,6 +276,10 @@ function App() {
     <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
       <div id="territoryMap" ref={plotRef} />
       <div className="overlay" ref={overlayRef} />
+      <div className="zoom">
+        <button type="button" aria-label="Zoom in" onClick={() => mapRef.current && mapRef.current.zoomIn()}>+</button>
+        <button type="button" aria-label="Zoom out" onClick={() => mapRef.current && mapRef.current.zoomOut()}>&minus;</button>
+      </div>
       {message && <div className="msg">{message}</div>}
       {!token && !message && (
         <div className="note" style={{ left: 12, right: 'auto' }}>Add a Mapbox access token for a basemap</div>
