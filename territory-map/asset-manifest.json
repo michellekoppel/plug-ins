@@ -1,13 +1,13 @@
 {
   "files": {
-    "main.css": "/plug-ins/territory-map/static/css/main.49263043.css",
-    "main.js": "/plug-ins/territory-map/static/js/main.d1d71e1a.js",
+    "main.css": "/plug-ins/territory-map/static/css/main.72d47488.css",
+    "main.js": "/plug-ins/territory-map/static/js/main.327cc06b.js",
     "index.html": "/plug-ins/territory-map/index.html",
-    "main.49263043.css.map": "/plug-ins/territory-map/static/css/main.49263043.css.map",
-    "main.d1d71e1a.js.map": "/plug-ins/territory-map/static/js/main.d1d71e1a.js.map"
+    "main.72d47488.css.map": "/plug-ins/territory-map/static/css/main.72d47488.css.map",
+    "main.327cc06b.js.map": "/plug-ins/territory-map/static/js/main.327cc06b.js.map"
   },
   "entrypoints": [
-    "static/css/main.49263043.css",
-    "static/js/main.d1d71e1a.js"
+    "static/css/main.72d47488.css",
+    "static/js/main.327cc06b.js"
   ]
 }
