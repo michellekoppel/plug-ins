@@ -1,0 +1,13 @@
+{
+  "files": {
+    "main.css": "/plug-ins/territory-map/static/css/main.49263043.css",
+    "main.js": "/plug-ins/territory-map/static/js/main.d1d71e1a.js",
+    "index.html": "/plug-ins/territory-map/index.html",
+    "main.49263043.css.map": "/plug-ins/territory-map/static/css/main.49263043.css.map",
+    "main.d1d71e1a.js.map": "/plug-ins/territory-map/static/js/main.d1d71e1a.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.49263043.css",
+    "static/js/main.d1d71e1a.js"
+  ]
+}
