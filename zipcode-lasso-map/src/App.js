@@ -823,7 +823,7 @@ function App() {
       // couldn't keep up -- each rebuild has to reload map tiles from
       // scratch, so a fast stream of updates kept the map stuck showing
       // that brief "no tiles yet" black state instead of ever finishing.
-      Plotly.react('myDiv', plotData, layout, { displayModeBar: true }).then(() => {
+      Plotly.react('myDiv', plotData, layout, { displayModeBar: true, scrollZoom: true }).then(() => {
         if (heatmapTrace) {
           applyHeatmapIntensity(document.getElementById('myDiv'), plotData.indexOf(heatmapTrace));
         }
@@ -939,8 +939,26 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderTrigger, heatmapMetricLabel, productLobLabel, mapboxAccessToken, setFilterZipcode, zctaByZip]);
 
+  // Zoom in/out via the underlying map (not Plotly.relayout) so the move
+  // fires the same relayout event scroll/pinch zoom does -- that's what
+  // keeps currentViewRef (and so the next redraw) on the zoomed view.
+  const zoomBy = direction => {
+    const graphDiv = document.getElementById('myDiv');
+    const subplot = graphDiv && graphDiv._fullLayout && graphDiv._fullLayout.mapbox && graphDiv._fullLayout.mapbox._subplot;
+    const map = subplot && subplot.map;
+    if (!map) return;
+    if (direction > 0) map.zoomIn();
+    else map.zoomOut();
+  };
+
   return (
-    <div id='myDiv'></div>
+    <>
+      <div id='myDiv'></div>
+      <div className='zoom-controls'>
+        <button type='button' aria-label='Zoom in' onClick={() => zoomBy(1)}>+</button>
+        <button type='button' aria-label='Zoom out' onClick={() => zoomBy(-1)}>&minus;</button>
+      </div>
+    </>
   );
 }
 
