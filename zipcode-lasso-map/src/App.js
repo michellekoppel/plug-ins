@@ -823,7 +823,14 @@ function App() {
       // couldn't keep up -- each rebuild has to reload map tiles from
       // scratch, so a fast stream of updates kept the map stuck showing
       // that brief "no tiles yet" black state instead of ever finishing.
-      Plotly.react('myDiv', plotData, layout, { displayModeBar: true, scrollZoom: true }).then(() => {
+      Plotly.react('myDiv', plotData, layout, {
+        displayModeBar: true,
+        scrollZoom: true,
+        displaylogo: false,
+        // Only pan and lasso in the toolbar -- zoom is handled by the
+        // scroll wheel and the +/- buttons below, not Plotly's own buttons.
+        modeBarButtons: [['pan2d', 'lasso2d']]
+      }).then(() => {
         if (heatmapTrace) {
           applyHeatmapIntensity(document.getElementById('myDiv'), plotData.indexOf(heatmapTrace));
         }
