@@ -1,0 +1,14 @@
+html, body, #root { height: 100%; margin: 0; }
+#territoryMap { width: 100vw; height: 100vh; }
+.legend {
+  position: absolute; top: 12px; left: 12px; z-index: 5;
+  background: rgba(255,255,255,0.92); border-radius: 4px; padding: 8px 12px;
+  font: 11px/1.7 ui-monospace, Menlo, monospace; color: #222; max-height: 70vh; overflow: auto;
+}
+.legend-row { display: flex; align-items: center; gap: 8px; }
+.legend-swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.note {
+  position: absolute; right: 12px; bottom: 8px; z-index: 5;
+  font: 600 11px ui-monospace, Menlo, monospace; background: rgba(255,255,255,0.85); padding: 2px 6px;
+}
+.msg { position: absolute; inset: 0; display: grid; place-items: center; font: 14px sans-serif; color: #555; text-align: center; padding: 24px; }
