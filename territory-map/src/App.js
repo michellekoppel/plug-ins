@@ -55,6 +55,19 @@ function money(n) {
   return `${sign}$${abs.toFixed(0)}`;
 }
 
+// Zips with a location but no boundary polygon (PO-box / single-organization
+// zips) are drawn as a small square so they still show up in their territory.
+const FALLBACK_R = 0.03;
+function geometryFor(f) {
+  if (f.geometry) return f.geometry;
+  const { lat, lon } = f.properties;
+  const r = FALLBACK_R;
+  return {
+    type: 'Polygon',
+    coordinates: [[[lon - r, lat - r], [lon - r, lat + r], [lon + r, lat + r], [lon + r, lat - r], [lon - r, lat - r]]],
+  };
+}
+
 function numOr(v, d) {
   const n = parseFloat(v);
   return Number.isFinite(n) ? n : d;
@@ -67,6 +80,9 @@ function App() {
   const [zctaByZip, setZctaByZip] = useState(null);
   const [error, setError] = useState(null);
   const plotRef = useRef(null);
+  const overlayRef = useRef(null);
+  const labelsRef = useRef([]);
+  const unbindRef = useRef(null);
 
   const token = config.MapboxAccessToken;
   const showLegend = config.ShowLegend !== false;
@@ -138,7 +154,7 @@ function App() {
     const opacity = Math.min(1, Math.max(0.05, numOr(config.FillOpacity, 0.8)));
 
     const traces = [];
-    const labelLon = [], labelLat = [], labelText = [];
+    const labels = [];
 
     model.forEach(t => {
       const features = [];
@@ -146,7 +162,7 @@ function App() {
       t.zips.forEach(z => {
         const f = zctaByZip.get(z);
         if (!f) return;
-        features.push({ type: 'Feature', id: z, properties: {}, geometry: f.geometry });
+        features.push({ type: 'Feature', id: z, properties: {}, geometry: geometryFor(f) });
         sumLat += f.properties.lat;
         sumLon += f.properties.lon;
       });
@@ -177,28 +193,13 @@ function App() {
         const d = (p.lat - mLat) ** 2 + ((p.lon - mLon) * Math.cos(mLat * Math.PI / 180)) ** 2;
         if (d < bestD) { bestD = d; best = p; }
       });
-      labelLon.push(best.lon);
-      labelLat.push(best.lat);
       const lines = [];
-      if (t.fw) lines.push(`<b>${t.fw}</b>`);
-      if (config.mmOpp) lines.push(`<b>${money(t.opp)}</b>`);
-      if (config.mmSales) lines.push(`<b>${money(t.sales)}</b>`);
-      lines.push(`<b>${t.name}</b>`);
-      labelText.push(lines.join('<br>'));
+      if (t.fw) lines.push(t.fw);
+      if (config.mmOpp) lines.push(money(t.opp));
+      if (config.mmSales) lines.push(money(t.sales));
+      lines.push(t.name);
+      labels.push({ lon: best.lon, lat: best.lat, lines });
     });
-
-    if (showLabels && labelLon.length) {
-      traces.push({
-        type: 'scattermapbox',
-        mode: 'text',
-        lon: labelLon,
-        lat: labelLat,
-        text: labelText,
-        textfont: { size: 12, color: '#111' },
-        hoverinfo: 'skip',
-        showlegend: false,
-      });
-    }
 
     const style = ['light', 'dark', 'streets', 'outdoors', 'satellite', 'satellite-streets'].includes(config.MapStyle)
       ? config.MapStyle : 'light';
@@ -217,7 +218,35 @@ function App() {
         zoom: numOr(config.MapZoom, DEFAULT_ZOOM),
       },
     };
-    Plotly.react(plotRef.current, traces, layout, { responsive: true, displaylogo: false, displayModeBar: false });
+    const gd = plotRef.current;
+    // Labels are plain HTML pinned to map coordinates (the Mapbox text layer
+    // depends on basemap font files and can silently fail to draw).
+    const overlay = overlayRef.current;
+    if (unbindRef.current) { unbindRef.current(); unbindRef.current = null; }
+    overlay.innerHTML = '';
+    const els = showLabels ? labels.map(l => {
+      const el = document.createElement('div');
+      el.className = 'tlabel';
+      l.lines.forEach(line => {
+        const row = document.createElement('div');
+        row.textContent = line;
+        el.appendChild(row);
+      });
+      overlay.appendChild(el);
+      return { el, l };
+    }) : [];
+    Plotly.react(gd, traces, layout, { responsive: true, displaylogo: false, displayModeBar: false }).then(() => {
+      const map = gd._fullLayout && gd._fullLayout.mapbox && gd._fullLayout.mapbox._subplot && gd._fullLayout.mapbox._subplot.map;
+      if (!map || typeof map.project !== 'function') return;
+      const place = () => els.forEach(({ el, l }) => {
+        const pt = map.project([l.lon, l.lat]);
+        el.style.transform = `translate(${pt.x}px, ${pt.y}px) translate(-50%, -50%)`;
+      });
+      place();
+      map.on('move', place);
+      map.on('resize', place);
+      unbindRef.current = () => { map.off('move', place); map.off('resize', place); };
+    });
   }, [model, zctaByZip, colors, token, showLabels, config.FillOpacity, config.MapStyle,
       config.MapCenterLat, config.MapCenterLon, config.MapZoom, config.mmOpp, config.mmSales]);
 
@@ -230,6 +259,7 @@ function App() {
   return (
     <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
       <div id="territoryMap" ref={plotRef} />
+      <div className="overlay" ref={overlayRef} />
       {message && <div className="msg">{message}</div>}
       {!token && !message && (
         <div className="note" style={{ left: 12, right: 'auto' }}>Add a Mapbox access token for a basemap</div>

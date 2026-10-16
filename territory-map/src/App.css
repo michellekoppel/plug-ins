@@ -12,3 +12,10 @@ html, body, #root { height: 100%; margin: 0; }
   font: 600 11px ui-monospace, Menlo, monospace; background: rgba(255,255,255,0.85); padding: 2px 6px;
 }
 .msg { position: absolute; inset: 0; display: grid; place-items: center; font: 14px sans-serif; color: #555; text-align: center; padding: 24px; }
+
+.overlay { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: hidden; }
+.tlabel {
+  position: absolute; left: 0; top: 0; text-align: center; white-space: nowrap;
+  font: 700 12px/1.25 ui-monospace, Menlo, monospace; color: #111;
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 2px #fff;
+}
