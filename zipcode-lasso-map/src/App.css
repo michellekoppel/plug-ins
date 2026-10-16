@@ -33,3 +33,17 @@ html, body, #root {
 .zoom-controls button:hover {
   background: #f0f0f0;
 }
+
+.zoom-controls button.active {
+  background: #1e6fd9;
+  color: #fff;
+}
+
+.zoom-controls button svg {
+  display: block;
+  margin: 0 auto;
+}
+
+.zoom-controls-gap {
+  height: 6px;
+}

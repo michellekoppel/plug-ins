@@ -336,6 +336,11 @@ function App() {
   // undone by the next redraw, which can happen as often as the source
   // data changes (e.g. every zip reassignment in a live editing tool).
   const currentViewRef = useRef(null);
+  // Active map tool ('lasso' or 'pan'), driven by the buttons at the bottom
+  // right. The ref (not just state) feeds the layout below so a data-driven
+  // redraw keeps whichever tool the viewer picked instead of resetting it.
+  const dragModeRef = useRef('lasso');
+  const [dragMode, setDragMode] = useState('lasso');
   const lastSeenContentKeyRef = useRef(null);
 
   // Keep requesting the next chunk until the host reports every row has
@@ -770,7 +775,7 @@ function App() {
       const mapStyle = validMapStyles.includes(config.MapStyle) ? config.MapStyle : 'light';
 
       const layout = {
-        dragmode: 'lasso',
+        dragmode: dragModeRef.current,
         mapbox: {
           center: {
             lat: centerLat,
@@ -824,12 +829,10 @@ function App() {
       // scratch, so a fast stream of updates kept the map stuck showing
       // that brief "no tiles yet" black state instead of ever finishing.
       Plotly.react('myDiv', plotData, layout, {
-        displayModeBar: true,
-        scrollZoom: true,
-        displaylogo: false,
-        // Only pan and lasso in the toolbar -- zoom is handled by the
-        // scroll wheel and the +/- buttons below, not Plotly's own buttons.
-        modeBarButtons: [['pan2d', 'lasso2d']]
+        // Plotly's own toolbar is hidden -- the pan/lasso and zoom buttons
+        // at the bottom right replace it. Scroll-wheel zoom stays on.
+        displayModeBar: false,
+        scrollZoom: true
       }).then(() => {
         if (heatmapTrace) {
           applyHeatmapIntensity(document.getElementById('myDiv'), plotData.indexOf(heatmapTrace));
@@ -958,10 +961,40 @@ function App() {
     else map.zoomOut();
   };
 
+  const chooseTool = mode => {
+    dragModeRef.current = mode;
+    setDragMode(mode);
+    Plotly.relayout('myDiv', { dragmode: mode });
+  };
+
   return (
     <>
       <div id='myDiv'></div>
       <div className='zoom-controls'>
+        <button
+          type='button'
+          aria-label='Pan'
+          title='Pan'
+          className={dragMode === 'pan' ? 'active' : ''}
+          onClick={() => chooseTool('pan')}
+        >
+          <svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+            <path d='M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3' />
+          </svg>
+        </button>
+        <button
+          type='button'
+          aria-label='Lasso select'
+          title='Lasso select'
+          className={dragMode === 'lasso' ? 'active' : ''}
+          onClick={() => chooseTool('lasso')}
+        >
+          <svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+            <ellipse cx='12' cy='9' rx='8' ry='5.5' strokeDasharray='3 2.5' />
+            <path d='M6.5 13c-1 2 0 4 2 4.5s3-.5 2.5-2' />
+          </svg>
+        </button>
+        <div className='zoom-controls-gap' />
         <button type='button' aria-label='Zoom in' onClick={() => zoomBy(1)}>+</button>
         <button type='button' aria-label='Zoom out' onClick={() => zoomBy(-1)}>&minus;</button>
       </div>
