@@ -336,6 +336,14 @@ function App() {
   // undone by the next redraw, which can happen as often as the source
   // data changes (e.g. every zip reassignment in a live editing tool).
   const currentViewRef = useRef(null);
+  // The configured (or built-in default) view, refreshed on every redraw,
+  // so the reset button has somewhere to go back to.
+  const defaultViewRef = useRef(null);
+  // Active map tool ('lasso' or 'pan'), driven by the buttons at the bottom
+  // right. The ref (not just state) feeds the layout below so a data-driven
+  // redraw keeps whichever tool the viewer picked instead of resetting it.
+  const dragModeRef = useRef('lasso');
+  const [dragMode, setDragMode] = useState('lasso');
   const lastSeenContentKeyRef = useRef(null);
 
   // Coalesces a burst of rapid source updates (e.g. while a user is
@@ -727,6 +735,7 @@ function App() {
       const configCenterLat = Number.isFinite(parsedCenterLat) ? parsedCenterLat : DEFAULT_MAP_CENTER_LAT;
       const configCenterLon = Number.isFinite(parsedCenterLon) ? parsedCenterLon : DEFAULT_MAP_CENTER_LON;
       const configZoom = Number.isFinite(parsedZoom) ? parsedZoom : DEFAULT_MAP_ZOOM;
+      defaultViewRef.current = { lat: configCenterLat, lon: configCenterLon, zoom: configZoom };
 
       const currentView = currentViewRef.current;
       const centerLat = currentView ? currentView.lat : configCenterLat;
@@ -826,7 +835,7 @@ function App() {
       }
 
       const layout = {
-        dragmode: 'lasso',
+        dragmode: dragModeRef.current,
         mapbox: {
           center: {
             lat: centerLat,
@@ -863,6 +872,8 @@ function App() {
           yref: 'paper',
           x: 0.99,
           y: 0.02 + i * 0.05,
+          // Clear of the map control buttons in the bottom-right corner.
+          xshift: -48,
           xanchor: 'right',
           yanchor: 'bottom',
           font: { size: 11, color: '#ccc' },
@@ -879,7 +890,12 @@ function App() {
       // couldn't keep up -- each rebuild has to reload map tiles from
       // scratch, so a fast stream of updates kept the map stuck showing
       // that brief "no tiles yet" black state instead of ever finishing.
-      Plotly.react('myDiv', plotData, layout, { displayModeBar: true }).then(() => {
+      Plotly.react('myDiv', plotData, layout, {
+        // Plotly's own toolbar is hidden -- the pan/lasso and zoom buttons
+        // at the bottom right replace it. Scroll-wheel zoom stays on.
+        displayModeBar: false,
+        scrollZoom: true
+      }).then(() => {
         if (heatmapTraces.length) {
           applyHeatDotBlur(document.getElementById('myDiv'), heatmapTraceIndices);
         }
@@ -997,9 +1013,96 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderTrigger, heatmapMetricLabel, productLobLabel, mapboxAccessToken, setFilterZipcode, zctaByZip]);
 
+  // Zoom in/out via the underlying map (not Plotly.relayout) so the move
+  // fires the same relayout event scroll/pinch zoom does -- that's what
+  // keeps currentViewRef (and so the next redraw) on the zoomed view.
+  const getMap = () => {
+    const graphDiv = document.getElementById('myDiv');
+    const subplot = graphDiv && graphDiv._fullLayout && graphDiv._fullLayout.mapbox && graphDiv._fullLayout.mapbox._subplot;
+    return subplot && subplot.map;
+  };
+
+  const zoomBy = direction => {
+    const map = getMap();
+    if (!map) return;
+    if (direction > 0) map.zoomIn();
+    else map.zoomOut();
+  };
+
+  // Back to the configured view with the lasso tool picked and no zips
+  // selected. Unlike zoomBy, the view jumps rather than animates, and
+  // currentViewRef is set up front: clearing the filter below refreshes the
+  // source, and the redraw that triggers would otherwise restore the old
+  // view (or a mid-animation one) right over the reset.
+  const resetMap = () => {
+    const graphDiv = document.getElementById('myDiv');
+    const view = defaultViewRef.current;
+    if (!graphDiv || !graphDiv.data || !view) return;
+
+    currentViewRef.current = { ...view };
+    dragModeRef.current = 'lasso';
+    setDragMode('lasso');
+    // selections: [] clears the leftover lasso outline; restyling every
+    // trace's selectedpoints to null undoes the dimming of unselected dots.
+    Plotly.relayout(graphDiv, {
+      'mapbox.center': { lat: view.lat, lon: view.lon },
+      'mapbox.zoom': view.zoom,
+      dragmode: 'lasso',
+      selections: []
+    });
+    Plotly.restyle(graphDiv, { selectedpoints: graphDiv.data.map(() => null) });
+    setFilterZipcode(null);
+  };
+
+  const chooseTool = mode => {
+    dragModeRef.current = mode;
+    setDragMode(mode);
+    Plotly.relayout('myDiv', { dragmode: mode });
+  };
+
   return (
     <>
       <div id='myDiv'></div>
+      <div className='zoom-controls'>
+        <button
+          type='button'
+          aria-label='Pan'
+          title='Pan'
+          className={dragMode === 'pan' ? 'active' : ''}
+          onClick={() => chooseTool('pan')}
+        >
+          <svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+            <path d='M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3' />
+          </svg>
+        </button>
+        <button
+          type='button'
+          aria-label='Lasso select'
+          title='Lasso select'
+          className={dragMode === 'lasso' ? 'active' : ''}
+          onClick={() => chooseTool('lasso')}
+        >
+          <svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+            <ellipse cx='12' cy='9' rx='8' ry='5.5' strokeDasharray='3 2.5' />
+            <path d='M6.5 13c-1 2 0 4 2 4.5s3-.5 2.5-2' />
+          </svg>
+        </button>
+        <div className='zoom-controls-gap' />
+        <button type='button' aria-label='Zoom in' onClick={() => zoomBy(1)}>+</button>
+        <button type='button' aria-label='Zoom out' onClick={() => zoomBy(-1)}>&minus;</button>
+        <div className='zoom-controls-gap' />
+        <button
+          type='button'
+          aria-label='Reset map'
+          title='Reset zoom, pan and selection'
+          onClick={resetMap}
+        >
+          <svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+            <path d='M3 12a9 9 0 1 0 3-6.7' />
+            <path d='M3 4v5h5' />
+          </svg>
+        </button>
+      </div>
       {statusMessage && (
         <div style={{
           position: 'fixed',
