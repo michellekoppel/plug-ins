@@ -147,10 +147,12 @@ const DEFAULT_HEATMAP_RADIUS = 20;
 // there isn't real density, so only the actual hot spots read as blobs.
 const HEATMAP_COLORSCALE = [
   [0, 'rgba(0,200,120,0)'],
-  [0.15, 'rgba(0,200,120,0.45)'],
-  [0.4, 'rgba(173,220,40,0.6)'],
-  [0.6, 'rgba(255,221,0,0.75)'],
-  [0.8, 'rgba(255,140,0,0.85)'],
+  [.05, 'rgba(0,200,120,0.75)'],
+  [0.15, 'rgba(0,200,120,0.75)'],
+  [0.4, 'rgba(173,220,40,0.85)'],
+  [0.5, 'rgba(255,221,0,0.85)'],
+  [0.7, 'rgba(255,140,0,0.85)'],
+  [0.9, 'rgba(220,20,20,0.95)'],
   [1, 'rgba(220,20,20,0.95)']
 ];
 
