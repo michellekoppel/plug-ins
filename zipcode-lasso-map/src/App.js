@@ -138,25 +138,52 @@ const DEFAULT_MAP_CENTER_LON = -98.5795;
 const DEFAULT_MAP_ZOOM = 3.3;
 const DEFAULT_HEATMAP_RADIUS = 20;
 
-// Plotly's densitymapbox colors the entire kernel-density surface,
-// including near-zero density -- with an ordinary colorscale that paints
-// low density as a solid color too, so instead of isolated blobs you get
-// one continuous wash covering the whole area between points, hiding
-// whatever's underneath (the territory shapes and dots). Fading the low
-// end to fully transparent lets the map underneath show through wherever
-// there isn't real density, so only the actual hot spots read as blobs.
-const HEATMAP_COLORSCALE = [
-  [0, 'rgba(0,200,120,0)'],
-  [.05, 'rgba(0,200,120,0.75)'],
-  [0.15, 'rgba(0,200,120,0.75)'],
-  [0.4, 'rgba(173,220,40,0.85)'],
-  [0.5, 'rgba(255,221,0,0.85)'],
-  [0.7, 'rgba(255,140,0,0.85)'],
-  [0.9, 'rgba(220,20,20,0.95)'],
-  [1, 'rgba(220,20,20,0.95)']
+// The heat map is one dot per zip, built from concentric soft-edged circles
+// rather than a kernel-density surface. Density fades every point from its
+// center outward and shrinks low-value points, so low zips read as faint
+// smudges; here every zip gets the same full-size green circle, and hotter
+// zips grow warmer centers inside it -- yellow first, then orange, then red
+// -- until the hottest are nearly all red. The blur between layers supplies
+// the in-between shades (yellow-green, etc.).
+//
+// Each layer above the base appears once a zip's percentile (0..1) passes
+// `start`, and grows linearly to `maxFraction` of the dot's radius by `end`.
+// Drawn bottom to top.
+const HEAT_LAYERS = [
+  { color: 'rgb(0,200,120)', start: 0, end: 0, maxFraction: 1 },
+  { color: 'rgb(255,221,0)', start: 0.2, end: 0.6, maxFraction: 0.9 },
+  { color: 'rgb(255,140,0)', start: 0.45, end: 0.8, maxFraction: 0.85 },
+  { color: 'rgb(220,20,20)', start: 0.6, end: 1, maxFraction: 0.8 }
 ];
+const HEAT_DOT_OPACITY = 0.85;
+// Mapbox circle-blur, as a fraction of the radius -- softens each layer's
+// edge so the colors blend into a gradient instead of hard bands, and
+// overlapping dots blend instead of looking like stickers.
+const HEAT_DOT_BLUR = 0.4;
 
-// densitymapbox's radius is a constant number of screen pixels, which
+// Percentile (0..1) of each weight, by rank among all the weights passed
+// in. Rank-based so a handful of huge zips can't push everything else down
+// to all-green. Ties share their first-ranked occurrence's percentile, so
+// equal values always look the same.
+function heatPercentiles(weights) {
+  if (weights.length === 1) return [1];
+  const sorted = [...weights].sort((a, b) => a - b);
+  const firstRank = new Map();
+  sorted.forEach((w, i) => {
+    if (!firstRank.has(w)) firstRank.set(w, i);
+  });
+  return weights.map(w => firstRank.get(w) / (sorted.length - 1));
+}
+
+// How much of the dot's radius (0..maxFraction) a layer covers at a given
+// percentile.
+function heatLayerFraction(layer, percentile) {
+  if (layer.end <= layer.start) return percentile >= layer.start ? layer.maxFraction : 0;
+  const t = (percentile - layer.start) / (layer.end - layer.start);
+  return Math.max(0, Math.min(1, t)) * layer.maxFraction;
+}
+
+// A heat dot's radius is a constant number of screen pixels, which
 // covers a shrinking geographic area as you zoom in -- but not fast
 // enough to stay within a single zip once you're zoomed in past a
 // regional view, so a zip's heat visibly bleeds into its neighbors'.
@@ -194,28 +221,14 @@ function outerRings(geometry) {
   return [];
 }
 
-// Plotly's densitymapbox emits heatmap-radius as a flat pixel constant and
-// never sets heatmap-intensity at all, so it stays at Mapbox's default of 1.
-// Zooming in therefore spreads the same points across more pixels, collapsing
-// the per-pixel density sum and sliding the whole heat map toward the cool end
-// of the colorscale. Mapbox's own remedy is a zoom-interpolated intensity,
-// which Plotly exposes no attribute for -- so it gets set directly on the
-// layer Plotly manages. Deliberately a separate knob from radiusForZoom:
-// radius stays small when zoomed in so a zip's heat stays inside that zip,
-// while intensity buys back the color that shrinking costs.
-const HEATMAP_INTENSITY_BY_ZOOM = [
-  'interpolate', ['linear'], ['zoom'],
-  4, 1,
-  8, 1.5,
-  11, 4,
-  14, 10,
-  16, 18
-];
-
-// Reaches past Plotly's public API into the Mapbox layer underneath it, so
-// every hop is guarded: if a Plotly upgrade moves any of this, the cost should
-// be a flat heat map, never a thrown error.
-function applyHeatmapIntensity(graphDiv, heatmapTraceIndex) {
+// Plotly's scattermapbox exposes no attribute for Mapbox's circle-blur, so
+// the heat dots' soft edge gets set directly on the circle layer Plotly
+// manages. That reaches past Plotly's public API, so every hop is guarded:
+// if a Plotly upgrade moves any of this, the cost should be hard-edged dots,
+// never a thrown error. No regex fallback on the layer id here -- the dot
+// trace is also a scattermapbox circle layer, and blurring it by mistake
+// would be worse than not blurring at all.
+function applyHeatDotBlur(graphDiv, heatmapTraceIndices) {
   try {
     const fullLayout = graphDiv && graphDiv._fullLayout;
     const subplot = fullLayout && fullLayout.mapbox && fullLayout.mapbox._subplot;
@@ -223,20 +236,14 @@ function applyHeatmapIntensity(graphDiv, heatmapTraceIndex) {
     if (!map || typeof map.setPaintProperty !== 'function') return;
 
     const fullData = graphDiv._fullData;
-    const trace = fullData && fullData[heatmapTraceIndex];
-    let layerId = trace && trace.uid ? `plotly-trace-layer-${trace.uid}-heatmap` : null;
-
-    if (!layerId || !map.getLayer(layerId)) {
-      const style = typeof map.getStyle === 'function' ? map.getStyle() : null;
-      const layers = (style && style.layers) || [];
-      const match = layers.find(l => /^plotly-trace-layer-.*-heatmap$/.test(l.id));
-      layerId = match ? match.id : null;
-    }
-    if (!layerId || !map.getLayer(layerId)) return;
-
-    map.setPaintProperty(layerId, 'heatmap-intensity', HEATMAP_INTENSITY_BY_ZOOM);
+    heatmapTraceIndices.forEach(i => {
+      const trace = fullData && fullData[i];
+      const layerId = trace && trace.uid ? `plotly-trace-layer-${trace.uid}-circle` : null;
+      if (!layerId || !map.getLayer(layerId)) return;
+      map.setPaintProperty(layerId, 'circle-blur', HEAT_DOT_BLUR);
+    });
   } catch (err) {
-    // Non-fatal -- the heat map still draws, just without zoom compensation.
+    // Non-fatal -- the heat dots still draw, just with hard edges.
   }
 }
 
@@ -726,52 +733,82 @@ function App() {
       const centerLon = currentView ? currentView.lon : configCenterLon;
       const zoom = currentView ? currentView.zoom : configZoom;
 
-      // Optional heat map layer, drawn on top of the territory shapes and
-      // dots. Its intensity per zip is that zip's total (summed across all
-      // channels) for whichever of MM Opp / MM Sales / Mtgs the
-      // heatmapMetric Sigma variable currently selects.
-      let heatmapTrace = null;
+      // Optional heat map layer, drawn on top of the territory shapes. One
+      // dot per zip with a positive total (summed across all channels) for
+      // whichever of MM Opp / MM Sales / Mtgs the heatmapMetric Sigma
+      // variable currently selects, its warm center sized by that total's
+      // percentile. heatmapFractions[i] holds heatmapTraces[i]'s per-dot
+      // radius fractions, for re-sizing on zoom.
+      const heatmapTraces = [];
+      const heatmapFractions = [];
       let baseHeatmapRadius = DEFAULT_HEATMAP_RADIUS;
       if (config.ShowHeatmap && (mmOppCol || mmSalesCol || mtgsCol)) {
         const metricKey = metricKeyFromLabel(heatmapMetricLabel);
-        const heatLons = [];
-        const heatLats = [];
-        const heatWeights = [];
+        const heatPoints = [];
 
         zipAgg.forEach((agg, normZip) => {
           const weight = agg.totals[metricKey];
           if (!weight || weight <= 0) return;
           const entry = zctaByZip.get(normZip);
-          heatLons.push(entry.lon);
-          heatLats.push(entry.lat);
-          heatWeights.push(weight);
+          heatPoints.push({ lon: entry.lon, lat: entry.lat, weight });
         });
 
-        if (heatLons.length) {
+        if (heatPoints.length) {
           const parsedRadius = parseFloat(config.HeatmapRadius);
           baseHeatmapRadius = Number.isFinite(parsedRadius) ? parsedRadius : DEFAULT_HEATMAP_RADIUS;
-          heatmapTrace = {
-            type: 'densitymapbox',
-            lon: heatLons,
-            lat: heatLats,
-            z: heatWeights,
-            radius: radiusForZoom(baseHeatmapRadius, zoom),
-            colorscale: HEATMAP_COLORSCALE,
-            // Opacity is already baked into each colorscale stop above, so
-            // this stays at 1 rather than dimming everything a second time.
-            opacity: 1,
-            showscale: false,
-            hoverinfo: 'skip'
-          };
+          // Ascending, so within a layer the hotter dot draws on top.
+          heatPoints.sort((a, b) => a.weight - b.weight);
+          const percentiles = heatPercentiles(heatPoints.map(p => p.weight));
+          const dotSize = 2 * radiusForZoom(baseHeatmapRadius, zoom);
+
+          // One trace per HEAT_LAYERS entry, each holding only the zips hot
+          // enough to show that layer. Every zip's yellow sits above every
+          // zip's green, and so on, so a hot zip's center is never buried
+          // under a cooler neighbor's edge.
+          HEAT_LAYERS.forEach(layer => {
+            const lons = [];
+            const lats = [];
+            const fractions = [];
+            heatPoints.forEach((p, i) => {
+              const fraction = heatLayerFraction(layer, percentiles[i]);
+              if (fraction <= 0) return;
+              lons.push(p.lon);
+              lats.push(p.lat);
+              fractions.push(fraction);
+            });
+            if (!lons.length) return;
+            heatmapTraces.push({
+              type: 'scattermapbox',
+              mode: 'markers',
+              lon: lons,
+              lat: lats,
+              marker: {
+                size: fractions.map(f => f * dotSize),
+                color: layer.color,
+                opacity: HEAT_DOT_OPACITY
+              },
+              // Same opacity either way, so a lasso selection (which only
+              // ever targets the zip dots) doesn't dim the heat map too.
+              selected: { marker: { opacity: HEAT_DOT_OPACITY } },
+              unselected: { marker: { opacity: HEAT_DOT_OPACITY } },
+              showlegend: false,
+              hoverinfo: 'skip'
+            });
+            heatmapFractions.push(fractions);
+          });
         }
       }
 
+      // The heat dots go before the zip dots: both are scattermapbox, which
+      // stack in trace order, and the zip dots need to stay on top to keep
+      // their tooltip and lasso selection.
       const plotData = [
         ...(choroplethTrace ? [choroplethTrace] : []),
         ...legendTraces,
-        dotTrace,
-        ...(heatmapTrace ? [heatmapTrace] : [])
+        ...heatmapTraces,
+        dotTrace
       ];
+      const heatmapTraceIndices = heatmapTraces.map(t => plotData.indexOf(t));
       const dotTraceIndex = plotData.indexOf(dotTrace);
       const choroplethTraceIndex = choroplethTrace ? plotData.indexOf(choroplethTrace) : null;
 
@@ -843,8 +880,8 @@ function App() {
       // scratch, so a fast stream of updates kept the map stuck showing
       // that brief "no tiles yet" black state instead of ever finishing.
       Plotly.react('myDiv', plotData, layout, { displayModeBar: true }).then(() => {
-        if (heatmapTrace) {
-          applyHeatmapIntensity(document.getElementById('myDiv'), plotData.indexOf(heatmapTrace));
+        if (heatmapTraces.length) {
+          applyHeatDotBlur(document.getElementById('myDiv'), heatmapTraceIndices);
         }
       });
 
@@ -926,15 +963,17 @@ function App() {
       graphDiv.on('plotly_relayout', trackCurrentView);
       graphDiv.on('plotly_relayouting', trackCurrentView);
 
-      // Re-scale the heat map's radius live as the viewer zooms, so it
-      // stays roughly confined to each zip instead of bleeding into its
-      // neighbors once you're zoomed in past a regional view.
-      if (heatmapTrace) {
-        const heatmapTraceIndex = plotData.length - 1;
+      // Re-scale the heat dots live as the viewer zooms, so each stays
+      // roughly confined to its zip instead of bleeding into its neighbors
+      // once you're zoomed in past a regional view.
+      if (heatmapTraces.length) {
         graphDiv.on('plotly_relayout', function (relayoutData) {
           const newZoom = relayoutData && relayoutData['mapbox.zoom'];
           if (typeof newZoom !== 'number') return;
-          Plotly.restyle(graphDiv, { radius: [radiusForZoom(baseHeatmapRadius, newZoom)] }, [heatmapTraceIndex]);
+          const dotSize = 2 * radiusForZoom(baseHeatmapRadius, newZoom);
+          const sizes = heatmapFractions.map(fractions => fractions.map(f => f * dotSize));
+          Plotly.restyle(graphDiv, { 'marker.size': sizes }, heatmapTraceIndices)
+            .then(() => applyHeatDotBlur(graphDiv, heatmapTraceIndices));
         });
       }
     }
