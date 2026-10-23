@@ -1,7 +1,7 @@
 # Zip Code Lasso Map
 
 A [Sigma Computing](https://www.sigmacomputing.com/) custom plugin that
-renders each zip code in a Sigma element as a filled shape on a Mapbox map,
+renders each zip code in a Sigma element as a filled shape on a Carto Positron basemap (no Mapbox token required),
 colored by a territory/region column, with a small dot at each zip's
 centroid. Lasso- or box-selecting dots filters the rest of the workbook by
 the zip codes selected.
@@ -79,8 +79,7 @@ much of rural Nevada's federal/BLM land) — not something a bigger or
 better dataset can fix, since there's no zip code to draw there. Getting
 literally gap-free nationwide coverage over that unpopulated land (as
 Sigma's built-in region map does) would require a licensed commercial
-zip-boundary dataset, which isn't available through a public Mapbox access
-token.
+zip-boundary dataset.
 
 ## Source size limit
 
@@ -116,9 +115,8 @@ When you add this plugin to a Sigma workbook, the editor panel exposes:
 | `ShowLegend` | Toggle | Show/hide the map legend. Default: on. |
 | `ShowHeatmap` | Toggle | Show/hide the heat map layer. Default: off. |
 | `HeatmapRadius` | Text | Heat map dot radius in pixels, at a regional zoom level or wider. Shrinks automatically as you zoom in further (see below). Default: `20`. |
-| `MapStyle` | Text | One of `light`, `dark`, `streets`, `outdoors`, `satellite`, `satellite-streets`. Default: `light`. |
+| `MapStyle` | Text | One of `carto-positron`, `carto-positron-nolabels`, `carto-darkmatter`, `carto-darkmatter-nolabels`, `carto-voyager`, `carto-voyager-nolabels`, `open-street-map`, `white-bg`. Anything else (including old Mapbox style names like `light`) falls back to the default. Default: `carto-positron`. |
 | `MapCenterLat` / `MapCenterLon` / `MapZoom` | Text | Fixed map view so it doesn't jump to fit whatever data is currently loaded. Defaults to framing the continental US. |
-| `MapboxAccessToken` | Secure text | Your [Mapbox access token](https://docs.mapbox.com/help/getting-started/access-tokens/), required to render the map. |
 
 ### Per-channel metrics and the heat map
 
@@ -153,11 +151,11 @@ percentile, orange around the 45th, red around the 60th, and each grows
 until the hottest zips are nearly all red. Percentiles are by rank, not by
 value, so a handful of very large zips can't push everything else down to
 green. (The territory shapes are
-drawn as a single `choroplethmapbox` trace rather than one `scattermapbox`
-fill-to-self trace per territory because Plotly's mapbox engine always
-stacks `choroplethmapbox` below every `scattermapbox` trace, which keeps
+drawn as a single `choroplethmap` trace rather than one `scattermap`
+fill-to-self trace per territory because Plotly's map engine always
+stacks `choroplethmap` below every `scattermap` trace, which keeps
 the shapes under the heat dots and zip dots regardless of trace order;
-`choroplethmapbox` only supports a single uniform shape border color
+`choroplethmap` only supports a single uniform shape border color
 rather than one tinted per territory.) That variable is meant to be set
 by a Sigma control you build elsewhere in the workbook (e.g. a button set
 with options `MM Opp`, `MM Sales`, `Mtgs`) — the plugin only reads it, so

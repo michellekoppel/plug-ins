@@ -156,7 +156,7 @@ const HEAT_LAYERS = [
   { color: 'rgb(220,20,20)', start: 0.6, end: 1, maxFraction: 0.8 }
 ];
 const HEAT_DOT_OPACITY = 0.85;
-// Mapbox circle-blur, as a fraction of the radius -- softens each layer's
+// MapLibre circle-blur, as a fraction of the radius -- softens each layer's
 // edge so the colors blend into a gradient instead of hard bands, and
 // overlapping dots blend instead of looking like stickers.
 const HEAT_DOT_BLUR = 0.4;
@@ -221,17 +221,17 @@ function outerRings(geometry) {
   return [];
 }
 
-// Plotly's scattermapbox exposes no attribute for Mapbox's circle-blur, so
+// Plotly's scattermap exposes no attribute for MapLibre's circle-blur, so
 // the heat dots' soft edge gets set directly on the circle layer Plotly
 // manages. That reaches past Plotly's public API, so every hop is guarded:
 // if a Plotly upgrade moves any of this, the cost should be hard-edged dots,
 // never a thrown error. No regex fallback on the layer id here -- the dot
-// trace is also a scattermapbox circle layer, and blurring it by mistake
+// trace is also a scattermap circle layer, and blurring it by mistake
 // would be worse than not blurring at all.
 function applyHeatDotBlur(graphDiv, heatmapTraceIndices) {
   try {
     const fullLayout = graphDiv && graphDiv._fullLayout;
-    const subplot = fullLayout && fullLayout.mapbox && fullLayout.mapbox._subplot;
+    const subplot = fullLayout && fullLayout.map && fullLayout.map._subplot;
     const map = subplot && subplot.map;
     if (!map || typeof map.setPaintProperty !== 'function') return;
 
@@ -246,6 +246,20 @@ function applyHeatDotBlur(graphDiv, heatmapTraceIndices) {
     // Non-fatal -- the heat dots still draw, just with hard edges.
   }
 }
+
+// Token-free basemaps (Carto / OpenStreetMap tiles via Plotly's MapLibre
+// engine) -- no Mapbox account or access token required.
+const DEFAULT_MAP_STYLE = 'carto-positron';
+const VALID_MAP_STYLES = [
+  'carto-positron',
+  'carto-positron-nolabels',
+  'carto-darkmatter',
+  'carto-darkmatter-nolabels',
+  'carto-voyager',
+  'carto-voyager-nolabels',
+  'open-street-map',
+  'white-bg'
+];
 
 // useElementData silently truncates past this, which would quietly drop rows
 // rather than fail, so it's surfaced on the map instead of left to chance.
@@ -270,16 +284,14 @@ client.config.configureEditorPanel([
   { name: 'ShowLegend', source: "Variables", type: "toggle", defaultValue: true },
   { name: 'ShowHeatmap', source: "Variables", type: "toggle", defaultValue: false },
   { name: 'HeatmapRadius', source: "Variables", type: 'text', defaultValue: String(DEFAULT_HEATMAP_RADIUS) },
-  { name: 'MapStyle', source: "Variables", type: 'text', defaultValue: "light" },
+  { name: 'MapStyle', source: "Variables", type: 'text', defaultValue: DEFAULT_MAP_STYLE },
   { name: 'MapCenterLat', source: "Variables", type: 'text', defaultValue: String(DEFAULT_MAP_CENTER_LAT) },
   { name: 'MapCenterLon', source: "Variables", type: 'text', defaultValue: String(DEFAULT_MAP_CENTER_LON) },
   { name: 'MapZoom', source: "Variables", type: 'text', defaultValue: String(DEFAULT_MAP_ZOOM) },
-  { name: 'MapboxAccessToken', type: 'text', secure: true },
 ]);
 
 function App() {
   const config = useConfig();
-  const mapboxAccessToken = config.MapboxAccessToken;
   // useIncrementalElementData is the natural fit here (no row cap, delivered
   // in chunks) and is what this used to call, but this host answers the
   // incremental subscription with an empty terminal chunk -- rowCount 0,
@@ -594,11 +606,11 @@ function App() {
         tooltipTextByTerritory.set(t, tooltipLines.join('<br>'));
       });
 
-      // Territory shapes are drawn as a single choroplethmapbox trace
-      // rather than one scattermapbox fill-to-self trace per territory.
-      // Plotly's mapbox engine hardcodes its layer stacking order --
-      // choroplethmapbox always below densitymapbox always below
-      // scattermapbox, regardless of trace array order -- so this is the
+      // Territory shapes are drawn as a single choroplethmap trace
+      // rather than one scattermap fill-to-self trace per territory.
+      // Plotly's map engine hardcodes its layer stacking order --
+      // choroplethmap always below densitymap always below
+      // scattermap, regardless of trace array order -- so this is the
       // only way to get the heat map to render on top of the territory
       // coloring instead of underneath it.
       const territoryIndex = new Map(sortedTerritories.map((t, i) => [t, i]));
@@ -640,7 +652,7 @@ function App() {
       });
 
       const choroplethTrace = territoryCount > 0 ? {
-        type: 'choroplethmapbox',
+        type: 'choroplethmap',
         geojson: { type: 'FeatureCollection', features: choroplethFeatures },
         locations: choroplethLocations,
         z: choroplethZ,
@@ -655,10 +667,10 @@ function App() {
       } : null;
 
       // Dummy invisible point traces purely to give each territory its
-      // own legend swatch -- choroplethmapbox only supports a single
+      // own legend swatch -- choroplethmap only supports a single
       // continuous colorscale legend, not one per category.
       const legendTraces = sortedTerritories.map(t => ({
-        type: 'scattermapbox',
+        type: 'scattermap',
         mode: 'markers',
         lon: [DEFAULT_MAP_CENTER_LON],
         lat: [DEFAULT_MAP_CENTER_LAT],
@@ -711,7 +723,7 @@ function App() {
       });
 
       const dotTrace = {
-        type: 'scattermapbox',
+        type: 'scattermap',
         mode: 'markers',
         name: 'Zip codes',
         lon: dotLons,
@@ -787,7 +799,7 @@ function App() {
             });
             if (!lons.length) return;
             heatmapTraces.push({
-              type: 'scattermapbox',
+              type: 'scattermap',
               mode: 'markers',
               lon: lons,
               lat: lats,
@@ -808,7 +820,7 @@ function App() {
         }
       }
 
-      // The heat dots go before the zip dots: both are scattermapbox, which
+      // The heat dots go before the zip dots: both are scattermap, which
       // stack in trace order, and the zip dots need to stay on top to keep
       // their tooltip and lasso selection.
       const plotData = [
@@ -821,9 +833,9 @@ function App() {
       const dotTraceIndex = plotData.indexOf(dotTrace);
       const choroplethTraceIndex = choroplethTrace ? plotData.indexOf(choroplethTrace) : null;
 
-      // Check if MapStyle is valid, if not, use the default value
-      const validMapStyles = ['light', 'dark', 'streets', 'outdoors', 'satellite', 'satellite-streets'];
-      const mapStyle = validMapStyles.includes(config.MapStyle) ? config.MapStyle : 'light';
+      // Saved workbooks may still hold an old Mapbox style name (e.g.
+      // "light"), so anything outside the token-free list falls back.
+      const mapStyle = VALID_MAP_STYLES.includes(config.MapStyle) ? config.MapStyle : DEFAULT_MAP_STYLE;
 
       // Bottom-right notes, stacked upward in order.
       const mapNotes = [];
@@ -836,7 +848,7 @@ function App() {
 
       const layout = {
         dragmode: dragModeRef.current,
-        mapbox: {
+        map: {
           center: {
             lat: centerLat,
             lon: centerLon
@@ -881,9 +893,8 @@ function App() {
         }))
       };
 
-      Plotly.setPlotConfig({ mapboxAccessToken: mapboxAccessToken });
       // Plotly.react (not Plotly.newPlot) patches the existing plot in
-      // place instead of tearing down and recreating the whole Mapbox GL
+      // place instead of tearing down and recreating the whole MapLibre GL
       // WebGL context every time this effect re-runs. With a data source
       // that updates frequently (e.g. while a user is actively dragging
       // zips around in a reassignment tool), newPlot's full teardown
@@ -970,8 +981,8 @@ function App() {
       // then would still see the pre-zoom view and reset back to it
       // before the animation ever gets to finish and report its result.
       function trackCurrentView(relayoutData) {
-        const newCenter = relayoutData && relayoutData['mapbox.center'];
-        const newZoom = relayoutData && relayoutData['mapbox.zoom'];
+        const newCenter = relayoutData && relayoutData['map.center'];
+        const newZoom = relayoutData && relayoutData['map.zoom'];
         if (newCenter && typeof newZoom === 'number') {
           currentViewRef.current = { lat: newCenter.lat, lon: newCenter.lon, zoom: newZoom };
         }
@@ -984,7 +995,7 @@ function App() {
       // once you're zoomed in past a regional view.
       if (heatmapTraces.length) {
         graphDiv.on('plotly_relayout', function (relayoutData) {
-          const newZoom = relayoutData && relayoutData['mapbox.zoom'];
+          const newZoom = relayoutData && relayoutData['map.zoom'];
           if (typeof newZoom !== 'number') return;
           const dotSize = 2 * radiusForZoom(baseHeatmapRadius, newZoom);
           const sizes = heatmapFractions.map(fractions => fractions.map(f => f * dotSize));
@@ -1011,14 +1022,14 @@ function App() {
     // effect on its own the moment a newer tick lands, independently of
     // (and bypassing) the debounce.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderTrigger, heatmapMetricLabel, productLobLabel, mapboxAccessToken, setFilterZipcode, zctaByZip]);
+  }, [renderTrigger, heatmapMetricLabel, productLobLabel, setFilterZipcode, zctaByZip]);
 
   // Zoom in/out via the underlying map (not Plotly.relayout) so the move
   // fires the same relayout event scroll/pinch zoom does -- that's what
   // keeps currentViewRef (and so the next redraw) on the zoomed view.
   const getMap = () => {
     const graphDiv = document.getElementById('myDiv');
-    const subplot = graphDiv && graphDiv._fullLayout && graphDiv._fullLayout.mapbox && graphDiv._fullLayout.mapbox._subplot;
+    const subplot = graphDiv && graphDiv._fullLayout && graphDiv._fullLayout.map && graphDiv._fullLayout.map._subplot;
     return subplot && subplot.map;
   };
 
@@ -1045,8 +1056,8 @@ function App() {
     // selections: [] clears the leftover lasso outline; restyling every
     // trace's selectedpoints to null undoes the dimming of unselected dots.
     Plotly.relayout(graphDiv, {
-      'mapbox.center': { lat: view.lat, lon: view.lon },
-      'mapbox.zoom': view.zoom,
+      'map.center': { lat: view.lat, lon: view.lon },
+      'map.zoom': view.zoom,
       dragmode: 'lasso',
       selections: []
     });
