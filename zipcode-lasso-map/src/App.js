@@ -164,6 +164,8 @@ const DEFAULT_MAP_CENTER_LAT = 39.8283;
 const DEFAULT_MAP_CENTER_LON = -98.5795;
 const DEFAULT_MAP_ZOOM = 3.3;
 const DEFAULT_HEATMAP_RADIUS = 20;
+// Which tool (pan or lasso) is active on first load and after Reset.
+const DEFAULT_DRAG_MODE = 'pan';
 
 // The heat map is one dot per zip, built from concentric soft-edged circles
 // rather than a kernel-density surface. Density fades every point from its
@@ -390,8 +392,8 @@ function App() {
   // Active map tool ('lasso' or 'pan'), driven by the buttons at the bottom
   // right. The ref (not just state) feeds the layout below so a data-driven
   // redraw keeps whichever tool the viewer picked instead of resetting it.
-  const dragModeRef = useRef('lasso');
-  const [dragMode, setDragMode] = useState('lasso');
+  const dragModeRef = useRef(DEFAULT_DRAG_MODE);
+  const [dragMode, setDragMode] = useState(DEFAULT_DRAG_MODE);
   const lastSeenContentKeyRef = useRef(null);
   // Last-rendered heat percentile per zip, to damp exactly the kind of
   // widespread, barely-visible resizing that made the heat map read as
@@ -402,6 +404,11 @@ function App() {
   // percentile only moves once its actual rank has shifted enough to
   // matter, rather than redrawing at the new exact value on every tick.
   const heatPercentileMemoRef = useRef(new Map());
+  // Last-rendered overall heat dot scale (zoom-derived, shared by every
+  // heat dot). Dampens the same way as heatPercentileMemoRef above, but for
+  // a source of size jitter that would move literally every dot at once
+  // rather than one at a time, since it's a single shared multiplier.
+  const heatDotSizeRef = useRef(null);
 
   // Keep requesting the next chunk until the host reports every row has
   // been delivered.
@@ -835,7 +842,15 @@ function App() {
           Array.from(memo.keys()).forEach(zip => {
             if (!seenZips.has(zip)) memo.delete(zip);
           });
-          const dotSize = 2 * radiusForZoom(baseHeatmapRadius, zoom);
+          const rawDotSize = 2 * radiusForZoom(baseHeatmapRadius, zoom);
+          const lastDotSize = heatDotSizeRef.current;
+          // 5% of the dot's own size as the threshold, not a fixed pixel
+          // count, so this behaves consistently whether HeatmapRadius is
+          // configured small or large.
+          const dotSize = (lastDotSize !== null && Math.abs(rawDotSize - lastDotSize) < lastDotSize * 0.05)
+            ? lastDotSize
+            : rawDotSize;
+          heatDotSizeRef.current = dotSize;
 
           // One trace per HEAT_LAYERS entry, each holding only the zips hot
           // enough to show that layer. Every zip's yellow sits above every
@@ -1043,8 +1058,13 @@ function App() {
         graphDiv.on('plotly_relayout', function (relayoutData) {
           const newZoom = relayoutData && relayoutData['map.zoom'];
           if (typeof newZoom !== 'number') return;
-          const dotSize = 2 * radiusForZoom(baseHeatmapRadius, newZoom);
-          const sizes = heatmapFractions.map(fractions => fractions.map(f => f * dotSize));
+          const rawDotSize = 2 * radiusForZoom(baseHeatmapRadius, newZoom);
+          const lastDotSize = heatDotSizeRef.current;
+          if (lastDotSize !== null && Math.abs(rawDotSize - lastDotSize) < lastDotSize * 0.05) {
+            return;
+          }
+          heatDotSizeRef.current = rawDotSize;
+          const sizes = heatmapFractions.map(fractions => fractions.map(f => f * rawDotSize));
           Plotly.restyle(graphDiv, { 'marker.size': sizes }, heatmapTraceIndices)
             .then(() => applyHeatDotBlur(graphDiv, heatmapTraceIndices));
         });
@@ -1086,7 +1106,7 @@ function App() {
     else map.zoomOut();
   };
 
-  // Back to the configured view with the lasso tool picked and no zips
+  // Back to the configured view with the default tool picked and no zips
   // selected. Unlike zoomBy, the view jumps rather than animates, and
   // currentViewRef is set up front: clearing the filter below refreshes the
   // source, and the redraw that triggers would otherwise restore the old
@@ -1097,14 +1117,14 @@ function App() {
     if (!graphDiv || !graphDiv.data || !view) return;
 
     currentViewRef.current = { ...view };
-    dragModeRef.current = 'lasso';
-    setDragMode('lasso');
+    dragModeRef.current = DEFAULT_DRAG_MODE;
+    setDragMode(DEFAULT_DRAG_MODE);
     // selections: [] clears the leftover lasso outline; restyling every
     // trace's selectedpoints to null undoes the dimming of unselected dots.
     Plotly.relayout(graphDiv, {
       'map.center': { lat: view.lat, lon: view.lon },
       'map.zoom': view.zoom,
-      dragmode: 'lasso',
+      dragmode: DEFAULT_DRAG_MODE,
       selections: []
     });
     Plotly.restyle(graphDiv, { selectedpoints: graphDiv.data.map(() => null) });
