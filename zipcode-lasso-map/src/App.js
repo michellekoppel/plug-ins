@@ -541,6 +541,22 @@ function App() {
         }
       }
 
+      // Bail out on every intermediate chunk while a large source is still
+      // streaming in -- useIncrementalElementData delivers rows in chunks,
+      // and each chunk's arrival is a genuine content change (more rows),
+      // so without this every single chunk was rebuilding the whole map,
+      // visible as it repeatedly flashing/redrawing (worse the larger the
+      // source, since a bigger source means more chunks) until the last one
+      // lands. Rendering once, only when the full source has arrived,
+      // avoids that regardless of how many chunks it took to get there --
+      // including if the host re-delivers the whole source again later
+      // (isComplete going false then true a second time), which would
+      // otherwise flash through every intermediate chunk of that re-fetch
+      // too.
+      if (!dataInfo.isComplete) {
+        return;
+      }
+
       const zip = sigmaData[config.zipcode];
       const territory = sigmaData[config.territory];
 
