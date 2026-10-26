@@ -130,6 +130,33 @@ function metricKeyFromLabel(label) {
   return 'mmOpp';
 }
 
+// The source element can have columns this plugin never reads (it's whatever
+// element the user pointed the config at, not a table built just for this
+// plugin). Scoping sigmaData down to only the columns actually bound below
+// before using it as a redraw trigger means some other column on that same
+// element changing -- a live timestamp, an unrelated calculation, anything
+// not plotted here -- can't by itself cause a redraw. Without this, that kind
+// of column alone was enough to retrigger a full map rebuild on every tick it
+// changed, which reads as the whole map (heat dots included) continuously
+// flickering/resizing even though nothing actually shown had changed.
+function relevantColumnIds(config) {
+  return [
+    config.zipcode, config.territory, config.channel, config.fw, config.city,
+    config.state, config.mmOpp, config.mmSales, config.mtgs,
+    ...(Array.isArray(config.tooltipFields) ? config.tooltipFields : [])
+  ].filter(Boolean);
+}
+
+function pickRelevantData(sigmaData, config) {
+  const relevant = {};
+  relevantColumnIds(config).forEach(id => {
+    if (sigmaData && Object.prototype.hasOwnProperty.call(sigmaData, id)) {
+      relevant[id] = sigmaData[id];
+    }
+  });
+  return relevant;
+}
+
 // Roughly centers and frames the continental US. Used as the fixed map view
 // so the map doesn't re-center/re-zoom to fit whatever subset of data (e.g.
 // after a lasso selection filters the source) happens to be loaded.
@@ -388,8 +415,11 @@ function App() {
     // particular returns a fresh object every call), and resetting the
     // timer on every one of those (rather than only on real changes)
     // could keep deferring the render indefinitely as long as those ticks
-    // keep arriving faster than the debounce delay.
-    const contentKey = JSON.stringify([sigmaData, columns, config]);
+    // keep arriving faster than the debounce delay. Scoped to the columns
+    // this plugin actually reads (see relevantColumnIds) so some other
+    // column on the same source element changing can't retrigger this on
+    // its own.
+    const contentKey = JSON.stringify([pickRelevantData(sigmaData, config), columns, config]);
     if (contentKey === lastSeenContentKeyRef.current) {
       return;
     }
@@ -458,16 +488,22 @@ function App() {
     // even when nothing actually changed, and gating on reference equality
     // instead would re-run the full Plotly.newPlot redraw on every one of
     // those ticks -- visible as the whole map flashing/rebuilding in a loop.
+    // Scoped to the columns this plugin actually reads (see
+    // relevantColumnIds), same as the debounce above -- otherwise some
+    // other column changing on the same source element passes this check
+    // too, and rebuilding the whole map (heat dots included) from scratch
+    // for no visible reason reads as it continuously flickering/resizing.
+    const relevantData = pickRelevantData(sigmaData, config);
     const columnsKey = JSON.stringify(columns);
     if (
       zctaByZip &&
       sigmaData &&
-      (JSON.stringify(sigmaData) !== JSON.stringify(prevSigmaData) ||
+      (JSON.stringify(relevantData) !== JSON.stringify(prevSigmaData) ||
         columnsKey !== prevColumnsRef.current ||
         heatmapMetricLabel !== prevHeatmapMetricLabelRef.current ||
         productLobLabel !== prevProductLobLabelRef.current)
     ) {
-      setPrevSigmaData(sigmaData);
+      setPrevSigmaData(relevantData);
       prevColumnsRef.current = columnsKey;
       prevHeatmapMetricLabelRef.current = heatmapMetricLabel;
       prevProductLobLabelRef.current = productLobLabel;
