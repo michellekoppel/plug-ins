@@ -393,6 +393,15 @@ function App() {
   const dragModeRef = useRef('lasso');
   const [dragMode, setDragMode] = useState('lasso');
   const lastSeenContentKeyRef = useRef(null);
+  // Last-rendered heat percentile per zip, to damp exactly the kind of
+  // widespread, barely-visible resizing that made the heat map read as
+  // continuously "moving" even with no one touching it: percentile rank is
+  // relative to every other zip's total, so one zip's total changing (e.g.
+  // a live reassignment tool moving a different, unrelated zip) nudges
+  // nearly everyone else's rank by a sliver too. A zip's displayed
+  // percentile only moves once its actual rank has shifted enough to
+  // matter, rather than redrawing at the new exact value on every tick.
+  const heatPercentileMemoRef = useRef(new Map());
 
   // Keep requesting the next chunk until the host reports every row has
   // been delivered.
@@ -799,7 +808,7 @@ function App() {
           const weight = agg.totals[metricKey];
           if (!weight || weight <= 0) return;
           const entry = zctaByZip.get(normZip);
-          heatPoints.push({ lon: entry.lon, lat: entry.lat, weight });
+          heatPoints.push({ zip: normZip, lon: entry.lon, lat: entry.lat, weight });
         });
 
         if (heatPoints.length) {
@@ -807,7 +816,25 @@ function App() {
           baseHeatmapRadius = Number.isFinite(parsedRadius) ? parsedRadius : DEFAULT_HEATMAP_RADIUS;
           // Ascending, so within a layer the hotter dot draws on top.
           heatPoints.sort((a, b) => a.weight - b.weight);
-          const percentiles = heatPercentiles(heatPoints.map(p => p.weight));
+          const rawPercentiles = heatPercentiles(heatPoints.map(p => p.weight));
+          // Snap each zip's percentile back to its last-rendered value
+          // unless it's moved by more than this -- see heatPercentileMemoRef.
+          const PERCENTILE_HYSTERESIS = 0.02;
+          const memo = heatPercentileMemoRef.current;
+          const seenZips = new Set();
+          const percentiles = heatPoints.map((p, i) => {
+            const raw = rawPercentiles[i];
+            const last = memo.get(p.zip);
+            const stable = (last !== undefined && Math.abs(raw - last) < PERCENTILE_HYSTERESIS) ? last : raw;
+            memo.set(p.zip, stable);
+            seenZips.add(p.zip);
+            return stable;
+          });
+          // Zips no longer in the data (filtered out, metric now zero/unset)
+          // shouldn't linger and grow this map forever.
+          Array.from(memo.keys()).forEach(zip => {
+            if (!seenZips.has(zip)) memo.delete(zip);
+          });
           const dotSize = 2 * radiusForZoom(baseHeatmapRadius, zoom);
 
           // One trace per HEAT_LAYERS entry, each holding only the zips hot
