@@ -1,7 +1,7 @@
 # Zip Code Lasso Map
 
 A [Sigma Computing](https://www.sigmacomputing.com/) custom plugin that
-renders each zip code in a Sigma element as a filled shape on a Mapbox map,
+renders each zip code in a Sigma element as a filled shape on a Carto Positron basemap (no Mapbox token required),
 colored by a territory/region column, with a small dot at each zip's
 centroid. Lasso- or box-selecting dots filters the rest of the workbook by
 the zip codes selected.
@@ -32,7 +32,9 @@ a table, `IN` condition on a control, etc).
 3. Lasso- or box-select the dots on the map (Plotly's map lasso/box select
    only works on point markers, not filled shapes, which is why the dots
    exist — they're the actual selection target, styled to sit unobtrusively
-   inside each colored shape).
+   inside each colored shape). The button cluster in the bottom-right corner
+   toggles between pan and lasso mode, zooms in/out, and resets the view
+   (and clears any selection) back to the configured default.
 4. The plugin collects the unique zip codes among the selected dots and
    writes them (comma-separated) into the `filterZipcode` Sigma control
    variable.
@@ -76,8 +78,7 @@ much of rural Nevada's federal/BLM land) — not something a bigger or
 better dataset can fix, since there's no zip code to draw there. Getting
 literally gap-free nationwide coverage over that unpopulated land (as
 Sigma's built-in region map does) would require a licensed commercial
-zip-boundary dataset, which isn't available through a public Mapbox access
-token.
+zip-boundary dataset.
 
 ## Configuration
 
@@ -98,10 +99,9 @@ When you add this plugin to a Sigma workbook, the editor panel exposes:
 | `productLob` | Control variable | Read-only, same as `heatmapMetric`. Whichever Product LOB label (e.g. `SA`, `FA`) a Sigma control elsewhere in the workbook currently has selected -- used only to label the dot tooltip's Opp/Sales/Mkt Share lines (e.g. `SA MM Opp`). The source is expected to already be filtered to that LOB upstream by the same control. |
 | `ShowLegend` | Toggle | Show/hide the map legend. Default: on. |
 | `ShowHeatmap` | Toggle | Show/hide the heat map layer. Default: off. |
-| `HeatmapRadius` | Text | Heat map point radius in pixels, at a regional zoom level or wider. Shrinks automatically as you zoom in further (see below). Default: `30`. |
-| `MapStyle` | Text | One of `light`, `dark`, `streets`, `outdoors`, `satellite`, `satellite-streets`. Default: `light`. |
+| `HeatmapRadius` | Text | Heat map dot radius in pixels, at a regional zoom level or wider. Shrinks automatically as you zoom in further (see below). Default: `20`. |
+| `MapStyle` | Text | One of `carto-positron`, `carto-positron-nolabels`, `carto-darkmatter`, `carto-darkmatter-nolabels`, `carto-voyager`, `carto-voyager-nolabels`, `open-street-map`, `white-bg`. Anything else (including old Mapbox style names like `light`) falls back to the default. Default: `carto-positron`. |
 | `MapCenterLat` / `MapCenterLon` / `MapZoom` | Text | Fixed map view so it doesn't jump to fit whatever data is currently loaded. Defaults to framing the continental US. |
-| `MapboxAccessToken` | Secure text | Your [Mapbox access token](https://docs.mapbox.com/help/getting-started/access-tokens/), required to render the map. |
 
 ### Per-channel metrics and the heat map
 
@@ -127,31 +127,33 @@ The dot tooltip reads, in order: `{fw} | {territory}`, then `{city}, {state}`
 columns are configured. The `productLob` prefix is omitted if that variable
 isn't set.
 
-The heat map (a Plotly `densitymapbox` layer) is drawn on top of the
-territory shapes but below the zip centroid dots, weighted by each zip's
-total for whichever metric `heatmapMetric` currently names. (Plotly's
-mapbox engine hardcodes a fixed stacking order — territory shapes below
-the heat map below the dots — regardless of trace order, which is why the
-territory shapes are always drawn as a single `choroplethmapbox` trace
-rather than one `scattermapbox` fill-to-self trace per territory;
-`choroplethmapbox` only supports a single uniform shape border color
-rather than one tinted per territory.) That variable is meant to be set
-by a Sigma control you build elsewhere in the workbook (e.g. a button set
-with options `MM Opp`, `MM Sales`, `Mtgs`) — the plugin only reads it, so
-wire up a control bound to the same variable if you want viewers to
-switch metrics live. The match is case-insensitive; anything unrecognized
-(including the variable being unset) falls back to `MM Opp`.
+The heat map draws one dot per zip on top of the territory shapes, for
+every zip with a positive total for whichever metric `heatmapMetric`
+currently names (zips at 0 get no dot). Every dot is the same size, with
+a soft green edge; hotter zips grow a warm center inside it, by percentile
+among all the zips currently loaded -- yellow appears around the 20th
+percentile, orange around the 45th, red around the 60th, and each grows
+until the hottest zips are nearly all red. Percentiles are by rank, not by
+value, so a handful of very large zips can't push everything else down to
+green. (The territory shapes are drawn as a single `choroplethmap` trace
+rather than one `scattermap` fill-to-self trace per territory because
+Plotly's map engine always stacks `choroplethmap` below every `scattermap`
+trace, which keeps the shapes under the heat dots and zip dots regardless
+of trace order; `choroplethmap` only supports a single uniform shape
+border color rather than one tinted per territory.) That variable is meant
+to be set by a Sigma control you build elsewhere in the workbook (e.g. a
+button set with options `MM Opp`, `MM Sales`, `Mtgs`) — the plugin only
+reads it, so wire up a control bound to the same variable if you want
+viewers to switch metrics live. The match is case-insensitive; anything
+unrecognized (including the variable being unset) falls back to `MM Opp`.
 
-`densitymapbox`'s radius is a constant number of screen pixels, which
-covers a shrinking geographic area as you zoom in, but not fast enough to
-stay within a single zip -- past a regional view it visibly bleeds into
+A heat dot's radius is a constant number of screen pixels, which covers a
+shrinking geographic area as you zoom in, but not fast enough to stay
+within a single zip -- past a regional view it visibly bleeds into
 neighboring zips, including ones with no data of their own. Above zoom
 level 8, the plugin shrinks the radius live as you zoom (down to a 4px
-floor) so heat stays roughly confined to the zip it belongs to; below
-that, `HeatmapRadius` is used as configured. Note that at close zoom the
-heat map can also show sharp rectangular seams instead of a smooth
-gradient -- that's a known rendering limitation of the (deprecated)
-Mapbox GL engine Plotly uses for this trace type, not a data issue.
+floor) so each dot stays roughly confined to the zip it belongs to; below
+that, `HeatmapRadius` is used as configured.
 
 ## Local development
 
