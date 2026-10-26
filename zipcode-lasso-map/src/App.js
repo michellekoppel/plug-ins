@@ -975,6 +975,27 @@ function App() {
         displayModeBar: false,
         scrollZoom: true
       }).then(() => {
+        // MapLibre sizes its WebGL canvas from the container's dimensions
+        // at the moment the map is created -- if the plugin's iframe
+        // hadn't finished laying out yet (its first paint, inside Sigma),
+        // that's 0x0 or stale, and the result is a blank map until
+        // *something* forces a resize. Any relayout happens to do that,
+        // which is why clicking a tool button "fixed" it -- forcing it
+        // here means the first paint doesn't depend on the viewer
+        // clicking anything. Tried twice (now, and shortly after) since
+        // on the very first render the container may not have finished
+        // settling even by the time this promise resolves.
+        const resizeMap = () => {
+          const g = document.getElementById('myDiv');
+          const subplot = g && g._fullLayout && g._fullLayout.map && g._fullLayout.map._subplot;
+          const mapInstance = subplot && subplot.map;
+          if (mapInstance && typeof mapInstance.resize === 'function') {
+            mapInstance.resize();
+          }
+        };
+        resizeMap();
+        setTimeout(resizeMap, 300);
+
         if (heatmapTraces.length) {
           applyHeatDotBlur(document.getElementById('myDiv'), heatmapTraceIndices);
         }
