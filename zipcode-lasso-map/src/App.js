@@ -780,6 +780,18 @@ function App() {
         lon: dotLons,
         lat: dotLats,
         marker: { size: 4, color: dotColors, opacity: 0.1 },
+        // Explicit selected/unselected styles, rather than relying on
+        // Plotly's own default dimming of whichever points aren't
+        // selected: that default is derived at render time from whatever
+        // selectedpoints happens to be, and wasn't a declared part of the
+        // trace, so anything that made Plotly re-derive the plot's visual
+        // state from the trace alone -- a MapLibre tile/style reload
+        // landing after the selection was already applied, for instance
+        // -- could drop back to the trace's own plain marker style with
+        // no dimming at all, undoing the contrast that was the only thing
+        // showing the selection in the first place.
+        selected: { marker: { opacity: 0.9, size: 7 } },
+        unselected: { marker: { opacity: 0.1 } },
         customdata: dotZips,
         text: dotLabels,
         hovertemplate: '%{text}<extra></extra>',
@@ -999,20 +1011,27 @@ function App() {
         if (heatmapTraces.length) {
           applyHeatDotBlur(document.getElementById('myDiv'), heatmapTraceIndices);
         }
-      });
 
-      // Re-apply the selection captured above (by zip identity, not
-      // index -- the new dot order may differ) so a data refresh that
-      // happens to land while zips are selected doesn't just wipe the
-      // selection out from under the user.
-      if (previouslySelectedZips) {
-        const newSelectedIndices = dotZips
-          .map((z, i) => (previouslySelectedZips.has(z) ? i : null))
-          .filter(i => i !== null);
-        if (newSelectedIndices.length) {
-          Plotly.restyle(graphDiv, { selectedpoints: [newSelectedIndices] }, [dotTraceIndex]);
+        // Re-apply the selection captured above (by zip identity, not
+        // index -- the new dot order may differ) so a data refresh that
+        // happens to land while zips are selected doesn't just wipe the
+        // selection out from under the user. Done here, inside
+        // Plotly.react's own .then(), rather than synchronously right
+        // after calling it -- restyling before react() had actually
+        // finished applying the new traces raced with its own internal
+        // setup and reliably lost, which is why a lasso selection would
+        // highlight correctly and then vanish the next time this effect
+        // re-ran (e.g. from an unrelated data tick elsewhere in the
+        // workbook) while zips were still selected.
+        if (previouslySelectedZips) {
+          const newSelectedIndices = dotZips
+            .map((z, i) => (previouslySelectedZips.has(z) ? i : null))
+            .filter(i => i !== null);
+          if (newSelectedIndices.length) {
+            Plotly.restyle(graphDiv, { selectedpoints: [newSelectedIndices] }, [dotTraceIndex]);
+          }
         }
-      }
+      });
 
       // Plotly.newPlot re-draws the plot but doesn't clear listeners
       // previously registered on this same div -- without this, every time
