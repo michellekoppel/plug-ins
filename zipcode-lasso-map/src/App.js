@@ -347,9 +347,17 @@ function App() {
   // loadMoreData) is used instead to make sure every row makes it through.
   const [sigmaData, loadMoreData, dataInfo] = useIncrementalElementData(config.source);
   const columns = useElementColumns(config.source);
-  // The current value is never read back -- this variable is write-only
-  // from the plugin's side (set on lasso-select, cleared on deselect).
-  const [, setFilterZipcode] = useVariable(config.filterZipcode);
+  // Written on lasso-select/deselect, same as before -- but now also read
+  // back (see filterZipcodeValue below and selectedZipsRef further down)
+  // as a second, durable source of what's currently selected, since it's
+  // Sigma's own variable state rather than this component's. Read only
+  // inside the heavy effect's body below, never added to its dependency
+  // array, the same way sigmaData/columns/config already are -- adding it
+  // as a dependency would re-run the whole effect (tearing down and
+  // rebuilding the map) every time the plugin's own lasso selection
+  // writes to it, undoing the selection that was just made.
+  const [filterZipcodeRaw, setFilterZipcode] = useVariable(config.filterZipcode);
+  const filterZipcodeValue = variableLabel(filterZipcodeRaw);
   // Set by a Sigma control (e.g. a button set or a value selector) built
   // elsewhere in the workbook -- the plugin only reads this, it never
   // writes it. Reduced to a plain string immediately: some control types
@@ -405,6 +413,16 @@ function App() {
   // data changes close enough together), it would read a stale "nothing
   // selected" and wipe the selection for good, with nothing left to
   // recover it from on any later redraw either.
+  //
+  // This ref alone isn't enough, though: if whatever's re-running the
+  // query behind a lasso selection (the host's own reactivity, following
+  // the filterZipcode write below) also tears down and recreates this
+  // whole plugin -- not just this effect, the entire React tree -- every
+  // in-memory ref resets to empty along with it, and there'd be nothing
+  // left to restore from at all. filterZipcodeValue (read in the redraw
+  // effect below) is the backstop for that: it's Sigma's own variable
+  // state, not this component's, so it survives a teardown this ref
+  // can't.
   const selectedZipsRef = useRef(new Set());
   // Last-rendered heat percentile per zip, to damp exactly the kind of
   // widespread, barely-visible resizing that made the heat map read as
@@ -548,10 +566,22 @@ function App() {
       // legitimate data refresh arrives while the user has zips
       // selected), capture which zips were selected before rebuilding the
       // plot below, so the selection can be re-applied by zip identity
-      // afterward instead of just disappearing. See selectedZipsRef above
-      // for why this reads that ref rather than reading back
-      // graphDiv.data's selectedpoints.
-      const previouslySelectedZips = selectedZipsRef.current.size ? selectedZipsRef.current : null;
+      // afterward instead of just disappearing. Prefers the ref (set
+      // synchronously, so it's correct even a moment before Sigma's own
+      // read-back of the variable below catches up to what was just
+      // written); falls back to filterZipcodeValue -- surviving even a
+      // full plugin teardown, per the comment on selectedZipsRef above --
+      // whenever the ref itself is empty, which covers both a fresh
+      // mount that happens to land with zips already selected (e.g. the
+      // query-completion teardown this whole mechanism exists for) and a
+      // plain page reload.
+      let previouslySelectedZips = selectedZipsRef.current.size ? selectedZipsRef.current : null;
+      if (!previouslySelectedZips && filterZipcodeValue) {
+        const fromVariable = new Set(filterZipcodeValue.split(',').map(z => z.trim()).filter(Boolean));
+        if (fromVariable.size) {
+          previouslySelectedZips = fromVariable;
+        }
+      }
 
       const zip = sigmaData[config.zipcode];
       const territory = sigmaData[config.territory];
@@ -1159,12 +1189,14 @@ function App() {
         });
       }
     }
-    // filterZipcode is intentionally omitted: it's only ever written here
-    // (via setFilterZipcode, from the lasso/deselect handlers below), never
-    // read. Including it would re-run this whole effect -- tearing down
-    // and rebuilding the map -- every time the plugin's own lasso
-    // selection writes to it, wiping out the selection that was just
-    // made. sigmaData/columns/config are also intentionally omitted in
+    // filterZipcodeRaw/filterZipcodeValue are intentionally omitted even
+    // though they're read above now (as a backstop for selectedZipsRef,
+    // see its comment): this effect is written here too, from the
+    // lasso/deselect handlers below, and including it as a dependency
+    // would re-run this whole effect -- tearing down and rebuilding the
+    // map -- every time the plugin's own lasso selection writes to it,
+    // wiping out the selection that was just made. sigmaData/columns/config
+    // are also intentionally omitted in
     // favor of renderTrigger, which only changes once the debounce above
     // settles; this effect still reads their latest values directly
     // (closed over from the current render) once it actually runs. Since
