@@ -1211,6 +1211,53 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderTrigger, heatmapMetricLabel, productLobLabel, setFilterZipcode, zctaByZip]);
 
+  // Backstop for the filterZipcodeValue fallback above: that fallback only
+  // gets read at the moment the big effect above happens to run, closed
+  // over whatever filterZipcodeValue was *then* -- but this variable's own
+  // resolution, after a fresh mount (e.g. the plugin being torn down and
+  // recreated once the query behind a lasso selection finishes), can
+  // itself land a beat after the rest of the mount's data is ready and
+  // that effect has already run once. Since filterZipcodeValue is
+  // deliberately not a dependency up there (to avoid the plugin's own
+  // writes re-triggering a full rebuild), a value that only arrives late
+  // would otherwise never get picked up at all. This effect exists solely
+  // to catch that: it reacts directly to filterZipcodeValue changing, and
+  // reconciles the dot/territory selection styling to match -- via a
+  // lightweight restyle, not a full rebuild -- whenever it doesn't already.
+  useEffect(() => {
+    const graphDiv = document.getElementById('myDiv');
+    if (!graphDiv || !graphDiv.data || !graphDiv.data.length) return;
+    const dotTrace = graphDiv.data.find(t => t.name === 'Zip codes');
+    if (!dotTrace) return;
+
+    const fromVariable = filterZipcodeValue
+      ? new Set(filterZipcodeValue.split(',').map(z => z.trim()).filter(Boolean))
+      : new Set();
+
+    // Already in sync -- most commonly because this is reacting to our
+    // own setFilterZipcode write, which already updated selectedZipsRef
+    // and the trace styling directly when it happened. Nothing to do.
+    const current = selectedZipsRef.current;
+    const alreadyMatches = current.size === fromVariable.size &&
+      Array.from(current).every(z => fromVariable.has(z));
+    if (alreadyMatches) return;
+
+    selectedZipsRef.current = fromVariable;
+    if (!fromVariable.size) return;
+
+    const dotTraceIndexNow = graphDiv.data.indexOf(dotTrace);
+    const choroplethTraceNow = graphDiv.data.find(t => t.type === 'choroplethmap');
+    const newSelectedIndices = dotTrace.customdata
+      .map((z, i) => (fromVariable.has(z) ? i : null))
+      .filter(i => i !== null);
+    if (!newSelectedIndices.length) return;
+
+    Plotly.restyle(graphDiv, { selectedpoints: [newSelectedIndices] }, [dotTraceIndexNow]);
+    if (choroplethTraceNow) {
+      Plotly.restyle(graphDiv, { selectedpoints: [[]] }, [graphDiv.data.indexOf(choroplethTraceNow)]);
+    }
+  }, [filterZipcodeValue, renderTrigger]);
+
   // Zoom in/out via the underlying map (not Plotly.relayout) so the move
   // fires the same relayout event scroll/pinch zoom does -- that's what
   // keeps currentViewRef (and so the next redraw) on the zoomed view.
