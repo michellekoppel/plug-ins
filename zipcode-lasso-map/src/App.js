@@ -395,6 +395,17 @@ function App() {
   const dragModeRef = useRef(DEFAULT_DRAG_MODE);
   const [dragMode, setDragMode] = useState(DEFAULT_DRAG_MODE);
   const lastSeenContentKeyRef = useRef(null);
+  // The authoritative "currently selected zips", updated synchronously by
+  // the lasso/deselect handlers below. Read directly (never read back from
+  // graphDiv.data[dotTraceIndex].selectedpoints) when a redraw needs to
+  // know what was selected beforehand: that property only reflects
+  // whatever the *previous* redraw's own restyle call last wrote into it,
+  // asynchronously, after Plotly.react resolved -- if a second redraw's
+  // effect run starts before that restyle has actually landed (two real
+  // data changes close enough together), it would read a stale "nothing
+  // selected" and wipe the selection for good, with nothing left to
+  // recover it from on any later redraw either.
+  const selectedZipsRef = useRef(new Set());
   // Last-rendered heat percentile per zip, to damp exactly the kind of
   // widespread, barely-visible resizing that made the heat map read as
   // continuously "moving" even with no one touching it: percentile rank is
@@ -537,16 +548,10 @@ function App() {
       // legitimate data refresh arrives while the user has zips
       // selected), capture which zips were selected before rebuilding the
       // plot below, so the selection can be re-applied by zip identity
-      // afterward instead of just disappearing.
-      let previouslySelectedZips = null;
-      if (graphDiv && graphDiv.data) {
-        const prevDotTrace = graphDiv.data.find(t => t.name === 'Zip codes');
-        if (prevDotTrace && Array.isArray(prevDotTrace.selectedpoints) && prevDotTrace.selectedpoints.length) {
-          previouslySelectedZips = new Set(
-            prevDotTrace.selectedpoints.map(i => prevDotTrace.customdata[i])
-          );
-        }
-      }
+      // afterward instead of just disappearing. See selectedZipsRef above
+      // for why this reads that ref rather than reading back
+      // graphDiv.data's selectedpoints.
+      const previouslySelectedZips = selectedZipsRef.current.size ? selectedZipsRef.current : null;
 
       const zip = sigmaData[config.zipcode];
       const territory = sigmaData[config.territory];
@@ -1094,6 +1099,7 @@ function App() {
         const uniqueSelectedZipcodes = Array.from(new Set(selectedZipcodes));
 
         if (uniqueSelectedZipcodes.length) {
+          selectedZipsRef.current = new Set(uniqueSelectedZipcodes);
           setFilterZipcode(uniqueSelectedZipcodes.join(","));
         } else {
           // A plain click with no drag (e.g. clicking outside every shape
@@ -1102,12 +1108,14 @@ function App() {
           // selection styling for that on its own, so it has to be reset
           // explicitly or the map stays visually stuck on the old
           // selection even though the filter variable is cleared below.
+          selectedZipsRef.current = new Set();
           clearVisualSelection();
           setFilterZipcode(null);
         }
       });
 
       graphDiv.on('plotly_deselect', function () {
+        selectedZipsRef.current = new Set();
         clearVisualSelection();
         setFilterZipcode(null);
       });
@@ -1200,6 +1208,7 @@ function App() {
     currentViewRef.current = { ...view };
     dragModeRef.current = DEFAULT_DRAG_MODE;
     setDragMode(DEFAULT_DRAG_MODE);
+    selectedZipsRef.current = new Set();
     // selections: [] clears the leftover lasso outline; restyling every
     // trace's selectedpoints to null undoes the dimming of unselected dots.
     Plotly.relayout(graphDiv, {
