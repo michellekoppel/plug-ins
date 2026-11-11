@@ -1029,6 +1029,26 @@ function App() {
             .filter(i => i !== null);
           if (newSelectedIndices.length) {
             Plotly.restyle(graphDiv, { selectedpoints: [newSelectedIndices] }, [dotTraceIndex]);
+            // The dimmed-background look while zips are selected (every
+            // unselected dot/shape fading so the selected dots stand out)
+            // is Plotly's own default behavior for any trace with an
+            // active selection *somewhere* in the figure -- but it's only
+            // engaged by the native lasso/box-select gesture itself, not
+            // by this restyle. A trace that was never given a
+            // selectedpoints value at all (true of every trace right after
+            // a fresh Plotly.react, including the choropleth, which this
+            // effect never sets one on) renders at full brightness
+            // regardless of what's selected elsewhere, which is why the
+            // territory shapes -- and the sense that anything is selected
+            // at all -- would revert to looking normal the next time this
+            // effect redrew while zips were still selected. Explicitly
+            // setting an empty (not null) selectedpoints here re-engages
+            // that dimming: "this trace has none of its own points
+            // selected", as opposed to "this trace isn't participating in
+            // a selection at all".
+            if (choroplethTraceIndex !== null) {
+              Plotly.restyle(graphDiv, { selectedpoints: [[]] }, [choroplethTraceIndex]);
+            }
           }
         }
       });
