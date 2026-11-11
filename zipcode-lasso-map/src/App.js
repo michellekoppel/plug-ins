@@ -347,17 +347,9 @@ function App() {
   // loadMoreData) is used instead to make sure every row makes it through.
   const [sigmaData, loadMoreData, dataInfo] = useIncrementalElementData(config.source);
   const columns = useElementColumns(config.source);
-  // Written on lasso-select/deselect, same as before -- but now also read
-  // back (see filterZipcodeValue below and selectedZipsRef further down)
-  // as a second, durable source of what's currently selected, since it's
-  // Sigma's own variable state rather than this component's. Read only
-  // inside the heavy effect's body below, never added to its dependency
-  // array, the same way sigmaData/columns/config already are -- adding it
-  // as a dependency would re-run the whole effect (tearing down and
-  // rebuilding the map) every time the plugin's own lasso selection
-  // writes to it, undoing the selection that was just made.
-  const [filterZipcodeRaw, setFilterZipcode] = useVariable(config.filterZipcode);
-  const filterZipcodeValue = variableLabel(filterZipcodeRaw);
+  // The current value is never read back -- this variable is write-only
+  // from the plugin's side (set on lasso-select, cleared on deselect).
+  const [, setFilterZipcode] = useVariable(config.filterZipcode);
   // Set by a Sigma control (e.g. a button set or a value selector) built
   // elsewhere in the workbook -- the plugin only reads this, it never
   // writes it. Reduced to a plain string immediately: some control types
@@ -403,27 +395,6 @@ function App() {
   const dragModeRef = useRef(DEFAULT_DRAG_MODE);
   const [dragMode, setDragMode] = useState(DEFAULT_DRAG_MODE);
   const lastSeenContentKeyRef = useRef(null);
-  // The authoritative "currently selected zips", updated synchronously by
-  // the lasso/deselect handlers below. Read directly (never read back from
-  // graphDiv.data[dotTraceIndex].selectedpoints) when a redraw needs to
-  // know what was selected beforehand: that property only reflects
-  // whatever the *previous* redraw's own restyle call last wrote into it,
-  // asynchronously, after Plotly.react resolved -- if a second redraw's
-  // effect run starts before that restyle has actually landed (two real
-  // data changes close enough together), it would read a stale "nothing
-  // selected" and wipe the selection for good, with nothing left to
-  // recover it from on any later redraw either.
-  //
-  // This ref alone isn't enough, though: if whatever's re-running the
-  // query behind a lasso selection (the host's own reactivity, following
-  // the filterZipcode write below) also tears down and recreates this
-  // whole plugin -- not just this effect, the entire React tree -- every
-  // in-memory ref resets to empty along with it, and there'd be nothing
-  // left to restore from at all. filterZipcodeValue (read in the redraw
-  // effect below) is the backstop for that: it's Sigma's own variable
-  // state, not this component's, so it survives a teardown this ref
-  // can't.
-  const selectedZipsRef = useRef(new Set());
   // Last-rendered heat percentile per zip, to damp exactly the kind of
   // widespread, barely-visible resizing that made the heat map read as
   // continuously "moving" even with no one touching it: percentile rank is
@@ -566,20 +537,14 @@ function App() {
       // legitimate data refresh arrives while the user has zips
       // selected), capture which zips were selected before rebuilding the
       // plot below, so the selection can be re-applied by zip identity
-      // afterward instead of just disappearing. Prefers the ref (set
-      // synchronously, so it's correct even a moment before Sigma's own
-      // read-back of the variable below catches up to what was just
-      // written); falls back to filterZipcodeValue -- surviving even a
-      // full plugin teardown, per the comment on selectedZipsRef above --
-      // whenever the ref itself is empty, which covers both a fresh
-      // mount that happens to land with zips already selected (e.g. the
-      // query-completion teardown this whole mechanism exists for) and a
-      // plain page reload.
-      let previouslySelectedZips = selectedZipsRef.current.size ? selectedZipsRef.current : null;
-      if (!previouslySelectedZips && filterZipcodeValue) {
-        const fromVariable = new Set(filterZipcodeValue.split(',').map(z => z.trim()).filter(Boolean));
-        if (fromVariable.size) {
-          previouslySelectedZips = fromVariable;
+      // afterward instead of just disappearing.
+      let previouslySelectedZips = null;
+      if (graphDiv && graphDiv.data) {
+        const prevDotTrace = graphDiv.data.find(t => t.name === 'Zip codes');
+        if (prevDotTrace && Array.isArray(prevDotTrace.selectedpoints) && prevDotTrace.selectedpoints.length) {
+          previouslySelectedZips = new Set(
+            prevDotTrace.selectedpoints.map(i => prevDotTrace.customdata[i])
+          );
         }
       }
 
@@ -1078,25 +1043,24 @@ function App() {
             .filter(i => i !== null);
           if (newSelectedIndices.length) {
             Plotly.restyle(graphDiv, { selectedpoints: [newSelectedIndices] }, [dotTraceIndex]);
-            // The dimmed-background look while zips are selected (every
-            // unselected dot/shape fading so the selected dots stand out)
-            // is Plotly's own default behavior for any trace with an
-            // active selection *somewhere* in the figure -- but it's only
-            // engaged by the native lasso/box-select gesture itself, not
-            // by this restyle. A trace that was never given a
-            // selectedpoints value at all (true of every trace right after
-            // a fresh Plotly.react, including the choropleth, which this
-            // effect never sets one on) renders at full brightness
-            // regardless of what's selected elsewhere, which is why the
-            // territory shapes -- and the sense that anything is selected
-            // at all -- would revert to looking normal the next time this
-            // effect redrew while zips were still selected. Explicitly
-            // setting an empty (not null) selectedpoints here re-engages
-            // that dimming: "this trace has none of its own points
-            // selected", as opposed to "this trace isn't participating in
-            // a selection at all".
+            // The choropleth trace needs the same restoration, not just a
+            // "some selection is active" nudge: its own selectedpoints was
+            // never set by the lasso gesture itself (that gesture landed on
+            // the dot trace, which is the only thing draggable), so without
+            // this it stays fully bright regardless of what's selected.
+            // choroplethLocations and dotZips are built from the same
+            // zipAgg.forEach iteration in the same order, so the indices
+            // line up one-to-one and the same newSelectedIndices apply here
+            // unchanged. Setting this is also what makes the border/fill
+            // actually dim for the *other*, unselected territory shapes --
+            // a trace with no selectedpoints value at all renders every
+            // point at full brightness no matter what's selected elsewhere,
+            // which is why the territories would look highlighted right
+            // after the lasso gesture (default Plotly behavior, no
+            // selectedpoints set yet) and then revert to looking normal the
+            // next time this effect redrew while zips were still selected.
             if (choroplethTraceIndex !== null) {
-              Plotly.restyle(graphDiv, { selectedpoints: [[]] }, [choroplethTraceIndex]);
+              Plotly.restyle(graphDiv, { selectedpoints: [newSelectedIndices] }, [choroplethTraceIndex]);
             }
           }
         }
@@ -1129,7 +1093,6 @@ function App() {
         const uniqueSelectedZipcodes = Array.from(new Set(selectedZipcodes));
 
         if (uniqueSelectedZipcodes.length) {
-          selectedZipsRef.current = new Set(uniqueSelectedZipcodes);
           setFilterZipcode(uniqueSelectedZipcodes.join(","));
         } else {
           // A plain click with no drag (e.g. clicking outside every shape
@@ -1138,14 +1101,12 @@ function App() {
           // selection styling for that on its own, so it has to be reset
           // explicitly or the map stays visually stuck on the old
           // selection even though the filter variable is cleared below.
-          selectedZipsRef.current = new Set();
           clearVisualSelection();
           setFilterZipcode(null);
         }
       });
 
       graphDiv.on('plotly_deselect', function () {
-        selectedZipsRef.current = new Set();
         clearVisualSelection();
         setFilterZipcode(null);
       });
@@ -1189,14 +1150,12 @@ function App() {
         });
       }
     }
-    // filterZipcodeRaw/filterZipcodeValue are intentionally omitted even
-    // though they're read above now (as a backstop for selectedZipsRef,
-    // see its comment): this effect is written here too, from the
-    // lasso/deselect handlers below, and including it as a dependency
-    // would re-run this whole effect -- tearing down and rebuilding the
-    // map -- every time the plugin's own lasso selection writes to it,
-    // wiping out the selection that was just made. sigmaData/columns/config
-    // are also intentionally omitted in
+    // filterZipcode is intentionally omitted: it's only ever written here
+    // (via setFilterZipcode, from the lasso/deselect handlers below), never
+    // read. Including it would re-run this whole effect -- tearing down
+    // and rebuilding the map -- every time the plugin's own lasso
+    // selection writes to it, wiping out the selection that was just
+    // made. sigmaData/columns/config are also intentionally omitted in
     // favor of renderTrigger, which only changes once the debounce above
     // settles; this effect still reads their latest values directly
     // (closed over from the current render) once it actually runs. Since
@@ -1210,53 +1169,6 @@ function App() {
     // (and bypassing) the debounce.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderTrigger, heatmapMetricLabel, productLobLabel, setFilterZipcode, zctaByZip]);
-
-  // Backstop for the filterZipcodeValue fallback above: that fallback only
-  // gets read at the moment the big effect above happens to run, closed
-  // over whatever filterZipcodeValue was *then* -- but this variable's own
-  // resolution, after a fresh mount (e.g. the plugin being torn down and
-  // recreated once the query behind a lasso selection finishes), can
-  // itself land a beat after the rest of the mount's data is ready and
-  // that effect has already run once. Since filterZipcodeValue is
-  // deliberately not a dependency up there (to avoid the plugin's own
-  // writes re-triggering a full rebuild), a value that only arrives late
-  // would otherwise never get picked up at all. This effect exists solely
-  // to catch that: it reacts directly to filterZipcodeValue changing, and
-  // reconciles the dot/territory selection styling to match -- via a
-  // lightweight restyle, not a full rebuild -- whenever it doesn't already.
-  useEffect(() => {
-    const graphDiv = document.getElementById('myDiv');
-    if (!graphDiv || !graphDiv.data || !graphDiv.data.length) return;
-    const dotTrace = graphDiv.data.find(t => t.name === 'Zip codes');
-    if (!dotTrace) return;
-
-    const fromVariable = filterZipcodeValue
-      ? new Set(filterZipcodeValue.split(',').map(z => z.trim()).filter(Boolean))
-      : new Set();
-
-    // Already in sync -- most commonly because this is reacting to our
-    // own setFilterZipcode write, which already updated selectedZipsRef
-    // and the trace styling directly when it happened. Nothing to do.
-    const current = selectedZipsRef.current;
-    const alreadyMatches = current.size === fromVariable.size &&
-      Array.from(current).every(z => fromVariable.has(z));
-    if (alreadyMatches) return;
-
-    selectedZipsRef.current = fromVariable;
-    if (!fromVariable.size) return;
-
-    const dotTraceIndexNow = graphDiv.data.indexOf(dotTrace);
-    const choroplethTraceNow = graphDiv.data.find(t => t.type === 'choroplethmap');
-    const newSelectedIndices = dotTrace.customdata
-      .map((z, i) => (fromVariable.has(z) ? i : null))
-      .filter(i => i !== null);
-    if (!newSelectedIndices.length) return;
-
-    Plotly.restyle(graphDiv, { selectedpoints: [newSelectedIndices] }, [dotTraceIndexNow]);
-    if (choroplethTraceNow) {
-      Plotly.restyle(graphDiv, { selectedpoints: [[]] }, [graphDiv.data.indexOf(choroplethTraceNow)]);
-    }
-  }, [filterZipcodeValue, renderTrigger]);
 
   // Zoom in/out via the underlying map (not Plotly.relayout) so the move
   // fires the same relayout event scroll/pinch zoom does -- that's what
@@ -1287,7 +1199,6 @@ function App() {
     currentViewRef.current = { ...view };
     dragModeRef.current = DEFAULT_DRAG_MODE;
     setDragMode(DEFAULT_DRAG_MODE);
-    selectedZipsRef.current = new Set();
     // selections: [] clears the leftover lasso outline; restyling every
     // trace's selectedpoints to null undoes the dimming of unselected dots.
     Plotly.relayout(graphDiv, {
