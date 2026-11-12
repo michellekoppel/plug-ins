@@ -122,8 +122,9 @@ zip, or why). All rows sharing a zip code are folded together:
   columns, the heat map has nothing to draw from and stays off regardless of
   `ShowHeatmap`.
 
-The dot tooltip reads, in order: `{fw} | {territory}`, then `{city}, {state}`
-(omitted if neither is configured), then `{productLob} MM Opp`,
+The dot tooltip reads, in order: `{fw} | {territory}`, then
+`{city}, {state} {zip}` (the city/state part is omitted if neither is
+configured, but the zip itself always shows), then `{productLob} MM Opp`,
 `{productLob} MM Sales`, and `{productLob} MM Mkt Share` (MM Sales ÷ MM Opp,
 `N/A` if there's no Opp to take a share of) for whichever of those metric
 columns are configured. The `productLob` prefix is omitted if that variable

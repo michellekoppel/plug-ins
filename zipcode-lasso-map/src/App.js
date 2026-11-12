@@ -831,16 +831,16 @@ function App() {
         dotColors.push(colorByTerritory.get(agg.territory));
         dotZips.push(agg.rawZip);
 
-        // Header: "{FW} | {Territory}" then "{City}, {State}" -- FW and
-        // territory are the rep and their assigned territory for this zip;
-        // city/state are omitted if those columns aren't configured.
+        // Header: "{FW} | {Territory}" then "{City}, {State} {Zip}" -- FW,
+        // city, and state are omitted if those columns aren't configured;
+        // the zip itself is always shown, since it's always available.
         const headerParts = [];
         if (agg.fw) headerParts.push(agg.fw);
         headerParts.push(agg.territory);
         const cityState = [agg.city, agg.state].filter(Boolean).join(', ');
+        const cityStateZip = cityState ? `${cityState} ${agg.rawZip}` : agg.rawZip;
 
-        const lines = [headerParts.join(' | ')];
-        if (cityState) lines.push(cityState);
+        const lines = [headerParts.join(' | '), cityStateZip];
         if (mmOppCol) lines.push(`${lobPrefix}MM Opp: ${formatCurrencyAbbrev(agg.totals.mmOpp)}`);
         if (mmSalesCol) lines.push(`${lobPrefix}MM Sales: ${formatCurrencyAbbrev(agg.totals.mmSales)}`);
         if (mmOppCol && mmSalesCol) {
