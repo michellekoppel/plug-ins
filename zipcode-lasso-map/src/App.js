@@ -770,14 +770,14 @@ function App() {
         zmax: territoryCount,
         colorscale: territoryColorscale,
         showscale: false,
-        marker: { opacity: 0.2, line: { width: 0 } },
+        marker: { opacity: 0.5, line: { width: 0 } },
         // Explicit, same reasoning as the dot trace's selected/unselected
         // style: Plotly's own *undeclared* default dimming of a trace with
         // no selection of its own (while some other trace in the figure
         // has an active one) isn't reliable enough to depend on here --
         // declaring it directly means the muted-background look while
         // zips are selected doesn't depend on Plotly inferring it.
-        selected: { marker: { opacity: 0.2 } },
+        selected: { marker: { opacity: 0.5 } },
         unselected: { marker: { opacity: 0.05 } },
         text: choroplethText,
         hoverinfo: 'text',
