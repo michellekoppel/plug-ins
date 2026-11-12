@@ -254,29 +254,6 @@ function outerRings(geometry) {
   return [];
 }
 
-// Some zips in the bundled dataset have a centroid but no boundary polygon
-// (e.g. PO-box-only or single-organization zip codes with no ZCTA at all).
-// Without this, those zips would render as an invisible gap in an otherwise
-// filled territory even though they're valid rows in the source data. Draw
-// a small square centered on the centroid instead, so there's at least a
-// visible patch of color rather than an unexplained hole.
-const FALLBACK_SHAPE_RADIUS_DEG = 0.025;
-
-function ringsForZip(entry) {
-  if (entry.rings.length) {
-    return entry.rings;
-  }
-  const { lat, lon } = entry;
-  const r = FALLBACK_SHAPE_RADIUS_DEG;
-  return [[
-    [lon - r, lat - r],
-    [lon - r, lat + r],
-    [lon + r, lat + r],
-    [lon + r, lat - r],
-    [lon - r, lat - r]
-  ]];
-}
-
 const ZIP_SEARCH_HIGHLIGHT_NAME = 'Zip search highlight';
 
 // A "you searched for this one" marker: a soft glow behind a solid center
@@ -740,15 +717,35 @@ function App() {
       const choroplethLocations = [];
       const choroplethZ = [];
       const choroplethText = [];
+      // Parallel to the three arrays above, but by rawZip instead of
+      // normZip -- lets the redraw-restoration code below match a
+      // previously-selected zip back to its choropleth index without
+      // assuming this array lines up 1:1 with dotZips (it doesn't: zips
+      // with no real ZCTA shape are skipped here but still get a dot).
+      const choroplethRawZips = [];
 
       zipAgg.forEach((agg, normZip) => {
-        const rings = ringsForZip(zctaByZip.get(normZip));
+        const entry = zctaByZip.get(normZip);
+        // A zip with no real ZCTA boundary -- a PO-box-only or
+        // single-organization zip with no residential census block behind
+        // it -- previously drew a fixed-size square centered on its
+        // centroid so it wasn't just an invisible gap. That square has no
+        // relationship to the actual territory boundaries around it,
+        // though, so at the zoom levels where it's big enough to notice it
+        // just overlaps neighboring territories' real shapes instead of
+        // reading as a clean boundary. Skipping it here entirely (the
+        // centroid dot alone still marks the zip) trades that overlap for
+        // a small gap in the fill, which reads far better on a map whose
+        // whole point is showing where one territory ends and the next
+        // begins.
+        if (!entry.rings.length) return;
         choroplethFeatures.push({
           type: 'Feature',
           id: normZip,
-          geometry: { type: 'MultiPolygon', coordinates: rings.map(ring => [ring]) }
+          geometry: { type: 'MultiPolygon', coordinates: entry.rings.map(ring => [ring]) }
         });
         choroplethLocations.push(normZip);
+        choroplethRawZips.push(agg.rawZip);
         // +0.5 lands each zip solidly inside its territory's color band
         // rather than exactly on the boundary between two bands.
         choroplethZ.push(territoryIndex.get(agg.territory) + 0.5);
@@ -1111,24 +1108,31 @@ function App() {
             .filter(i => i !== null);
           if (newSelectedIndices.length) {
             Plotly.restyle(graphDiv, { selectedpoints: [newSelectedIndices] }, [dotTraceIndex]);
-            // The choropleth trace needs the same restoration, not just a
-            // "some selection is active" nudge: its own selectedpoints was
-            // never set by the lasso gesture itself (that gesture landed on
-            // the dot trace, which is the only thing draggable), so without
-            // this it stays fully bright regardless of what's selected.
-            // choroplethLocations and dotZips are built from the same
-            // zipAgg.forEach iteration in the same order, so the indices
-            // line up one-to-one and the same newSelectedIndices apply here
-            // unchanged. Setting this is also what makes the border/fill
-            // actually dim for the *other*, unselected territory shapes --
-            // a trace with no selectedpoints value at all renders every
-            // point at full brightness no matter what's selected elsewhere,
-            // which is why the territories would look highlighted right
-            // after the lasso gesture (default Plotly behavior, no
-            // selectedpoints set yet) and then revert to looking normal the
-            // next time this effect redrew while zips were still selected.
-            if (choroplethTraceIndex !== null) {
-              Plotly.restyle(graphDiv, { selectedpoints: [newSelectedIndices] }, [choroplethTraceIndex]);
+          }
+          // The choropleth trace needs the same restoration, not just a
+          // "some selection is active" nudge: its own selectedpoints was
+          // never set by the lasso gesture itself (that gesture landed on
+          // the dot trace, which is the only thing draggable), so without
+          // this it stays fully bright regardless of what's selected.
+          // Computed separately from newSelectedIndices above, by zip
+          // identity rather than shared array position -- choroplethRawZips
+          // is shorter than dotZips whenever any zip has no real ZCTA shape
+          // (see the skip in the zipAgg.forEach above), so the two arrays'
+          // indices no longer line up 1:1. Setting this is also what makes
+          // the border/fill actually dim for the *other*, unselected
+          // territory shapes -- a trace with no selectedpoints value at all
+          // renders every point at full brightness no matter what's
+          // selected elsewhere, which is why the territories would look
+          // highlighted right after the lasso gesture (default Plotly
+          // behavior, no selectedpoints set yet) and then revert to looking
+          // normal the next time this effect redrew while zips were still
+          // selected.
+          if (choroplethTraceIndex !== null) {
+            const choroplethSelectedIndices = choroplethRawZips
+              .map((z, i) => (previouslySelectedZips.has(z) ? i : null))
+              .filter(i => i !== null);
+            if (choroplethSelectedIndices.length) {
+              Plotly.restyle(graphDiv, { selectedpoints: [choroplethSelectedIndices] }, [choroplethTraceIndex]);
             }
           }
         }

@@ -69,8 +69,10 @@ The plugin fetches this once per session (not bundled into the JS itself)
 and looks up rows from your Sigma data against it by 5-digit zip code (zip
 values are normalized first — a numeric column, a ZIP+4 suffix, or stray
 whitespace won't break the match). A zip with no boundary polygon (from
-either source above) renders as a small square at its centroid instead of a
-full shape, so it's still visible on the map even without a real outline.
+either source above) gets no territory shape at all -- just its centroid
+dot -- rather than an arbitrary fixed-size square that would overlap
+neighboring territories' real shapes without actually following any real
+boundary.
 
 Zip codes with no entry in this dataset at all are skipped and counted in a
 "N zip codes not shown" note in the bottom-right corner of the map, mirroring
