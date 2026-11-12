@@ -47,3 +47,37 @@ html, body, #root {
 .zoom-controls-gap {
   height: 6px;
 }
+
+.zip-search-wrapper {
+  position: relative;
+}
+
+.zip-search-flyout {
+  position: absolute;
+  top: 0;
+  right: 42px;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.zip-search-flyout input {
+  width: 100px;
+  margin: 0 10px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font: 400 14px/1 sans-serif;
+  color: #222;
+}
+
+.zip-search-flyout.error input {
+  color: #c0392b;
+}
+
+.zip-search-flyout.error input::placeholder {
+  color: #c0392b;
+}

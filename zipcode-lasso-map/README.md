@@ -33,8 +33,10 @@ a table, `IN` condition on a control, etc).
    only works on point markers, not filled shapes, which is why the dots
    exist — they're the actual selection target, styled to sit unobtrusively
    inside each colored shape). The button cluster in the bottom-right corner
-   toggles between pan and lasso mode, zooms in/out, and resets the view
-   (and clears any selection) back to the configured default.
+   searches for a zip code (jumping the map to it, regardless of whether
+   it's in the current data), toggles between pan and lasso mode, zooms
+   in/out, and resets the view (and clears any selection) back to the
+   configured default.
 4. The plugin collects the unique zip codes among the selected dots and
    writes them (comma-separated) into the `filterZipcode` Sigma control
    variable.

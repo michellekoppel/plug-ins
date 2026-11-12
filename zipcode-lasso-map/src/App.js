@@ -166,6 +166,10 @@ const DEFAULT_MAP_ZOOM = 3.3;
 const DEFAULT_HEATMAP_RADIUS = 20;
 // Which tool (pan or lasso) is active on first load and after Reset.
 const DEFAULT_DRAG_MODE = 'pan';
+// Map zoom level the search flyout jumps to -- close enough to frame a
+// single zip and its immediate surroundings, regardless of how large or
+// small that particular zip's own shape is.
+const ZIP_SEARCH_ZOOM = 11.5;
 
 // The heat map is one dot per zip, built from concentric soft-edged circles
 // rather than a kernel-density surface. Density fades every point from its
@@ -394,6 +398,12 @@ function App() {
   // redraw keeps whichever tool the viewer picked instead of resetting it.
   const dragModeRef = useRef(DEFAULT_DRAG_MODE);
   const [dragMode, setDragMode] = useState(DEFAULT_DRAG_MODE);
+  // Magnifying-glass zip search flyout above the tool buttons.
+  const [zipSearchOpen, setZipSearchOpen] = useState(false);
+  const [zipSearchValue, setZipSearchValue] = useState('');
+  const [zipSearchError, setZipSearchError] = useState(false);
+  const zipSearchInputRef = useRef(null);
+  const zipSearchWrapperRef = useRef(null);
   const lastSeenContentKeyRef = useRef(null);
   // Last-rendered heat percentile per zip, to damp exactly the kind of
   // widespread, barely-visible resizing that made the heat map read as
@@ -1211,6 +1221,45 @@ function App() {
     setFilterZipcode(null);
   };
 
+  // Looks a typed zip up in the full bundled zcta dataset (not just the
+  // zips present in the current Sigma data) and jumps the map to it, the
+  // same way resetMap jumps rather than animates. currentViewRef is set
+  // up front for the same reason it is there -- so a redraw landing right
+  // after doesn't undo the jump.
+  const searchZip = () => {
+    const graphDiv = document.getElementById('myDiv');
+    const normZip = normalizeZip(zipSearchValue);
+    const entry = normZip && zctaByZip && zctaByZip.get(normZip);
+    if (!graphDiv || !entry) {
+      setZipSearchError(true);
+      return;
+    }
+    const view = { lat: entry.lat, lon: entry.lon, zoom: ZIP_SEARCH_ZOOM };
+    currentViewRef.current = view;
+    Plotly.relayout(graphDiv, { 'map.center': { lat: view.lat, lon: view.lon }, 'map.zoom': view.zoom });
+    setZipSearchError(false);
+    setZipSearchValue('');
+    setZipSearchOpen(false);
+  };
+
+  useEffect(() => {
+    if (zipSearchOpen && zipSearchInputRef.current) {
+      zipSearchInputRef.current.focus();
+    }
+  }, [zipSearchOpen]);
+
+  useEffect(() => {
+    if (!zipSearchOpen) return;
+    const onClickOutside = e => {
+      if (zipSearchWrapperRef.current && !zipSearchWrapperRef.current.contains(e.target)) {
+        setZipSearchOpen(false);
+        setZipSearchError(false);
+      }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    return () => document.removeEventListener('mousedown', onClickOutside);
+  }, [zipSearchOpen]);
+
   const chooseTool = mode => {
     dragModeRef.current = mode;
     setDragMode(mode);
@@ -1221,6 +1270,47 @@ function App() {
     <>
       <div id='myDiv'></div>
       <div className='zoom-controls'>
+        <div className='zip-search-wrapper' ref={zipSearchWrapperRef}>
+          {zipSearchOpen && (
+            <div className={`zip-search-flyout${zipSearchError ? ' error' : ''}`}>
+              <input
+                ref={zipSearchInputRef}
+                type='text'
+                inputMode='numeric'
+                placeholder='Zip code'
+                value={zipSearchValue}
+                onChange={e => {
+                  setZipSearchValue(e.target.value);
+                  setZipSearchError(false);
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') searchZip();
+                  else if (e.key === 'Escape') {
+                    setZipSearchOpen(false);
+                    setZipSearchError(false);
+                  }
+                }}
+              />
+            </div>
+          )}
+          <button
+            type='button'
+            aria-label='Search zip code'
+            title='Search zip code'
+            className={zipSearchOpen ? 'active' : ''}
+            onClick={() => {
+              if (!zipSearchOpen) setZipSearchOpen(true);
+              else if (zipSearchValue.trim()) searchZip();
+              else if (zipSearchInputRef.current) zipSearchInputRef.current.focus();
+            }}
+          >
+            <svg viewBox='0 0 24 24' width='20' height='20' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+              <circle cx='10.5' cy='10.5' r='6.5' />
+              <path d='M20 20l-4.8-4.8' />
+            </svg>
+          </button>
+        </div>
+        <div className='zoom-controls-gap' />
         <button
           type='button'
           aria-label='Pan'
