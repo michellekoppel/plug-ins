@@ -170,6 +170,8 @@ const DEFAULT_DRAG_MODE = 'pan';
 // single zip and its immediate surroundings, regardless of how large or
 // small that particular zip's own shape is.
 const ZIP_SEARCH_ZOOM = 11.5;
+// How long the searched-for zip stays visibly highlighted after a jump.
+const ZIP_SEARCH_HIGHLIGHT_MS = 5000;
 
 // The heat map is one dot per zip, built from concentric soft-edged circles
 // rather than a kernel-density surface. Density fades every point from its
@@ -277,6 +279,48 @@ function ringsForZip(entry) {
   ]];
 }
 
+const ZIP_SEARCH_HIGHLIGHT_NAME = 'Zip search highlight';
+
+// A temporary "you searched for this one" marker: a soft glow behind a
+// solid center dot, labeled with the zip itself, at the searched zip's
+// centroid. Two traces rather than one because scattermap only supports a
+// single uniform marker size/color per trace -- the glow and the solid
+// center need different sizes to read as one ringed marker rather than a
+// single flat dot.
+function buildSearchHighlightTraces(highlight) {
+  if (!highlight) return [];
+  const { zip, lat, lon } = highlight;
+  return [
+    {
+      type: 'scattermap',
+      name: `${ZIP_SEARCH_HIGHLIGHT_NAME} glow`,
+      lon: [lon],
+      lat: [lat],
+      mode: 'markers',
+      marker: { size: 34, color: 'rgba(255,23,68,0.35)' },
+      hoverinfo: 'skip',
+      showlegend: false
+    },
+    {
+      type: 'scattermap',
+      name: ZIP_SEARCH_HIGHLIGHT_NAME,
+      lon: [lon],
+      lat: [lat],
+      mode: 'markers+text',
+      marker: { size: 13, color: '#ff1744' },
+      text: [zip],
+      textposition: 'top center',
+      // No explicit font family: MapLibre's text/symbol layers can only use
+      // glyphs already baked into the basemap style's own font stack, and
+      // an arbitrary CSS family (e.g. "Arial Black") that isn't one of
+      // those silently renders nothing rather than falling back visibly.
+      textfont: { size: 13, color: '#b71c1c' },
+      hoverinfo: 'skip',
+      showlegend: false
+    }
+  ];
+}
+
 // Plotly's scattermap exposes no attribute for MapLibre's circle-blur, so
 // the heat dots' soft edge gets set directly on the circle layer Plotly
 // manages. That reaches past Plotly's public API, so every hop is guarded:
@@ -380,6 +424,7 @@ function App() {
   // below happened to pass.
   const prevHeatmapMetricLabelRef = useRef(null);
   const prevProductLobLabelRef = useRef(null);
+  const prevSearchHighlightRef = useRef(null);
   const [zctaByZip, setZctaByZip] = useState(null);
   const [renderTrigger, setRenderTrigger] = useState(0);
   const renderDebounceRef = useRef(null);
@@ -404,6 +449,12 @@ function App() {
   const [zipSearchError, setZipSearchError] = useState(false);
   const zipSearchInputRef = useRef(null);
   const zipSearchWrapperRef = useRef(null);
+  // The zip a search last jumped to, drawn as a temporary highlight marker
+  // on top of the map until it times out (see ZIP_SEARCH_HIGHLIGHT_MS) or a
+  // new search replaces it. State, not a ref, so setting/clearing it is
+  // itself what triggers the redraw that adds/removes the marker.
+  const [searchHighlight, setSearchHighlight] = useState(null);
+  const searchHighlightTimeoutRef = useRef(null);
   const lastSeenContentKeyRef = useRef(null);
   // Last-rendered heat percentile per zip, to damp exactly the kind of
   // widespread, barely-visible resizing that made the heat map read as
@@ -534,12 +585,14 @@ function App() {
       (JSON.stringify(relevantData) !== JSON.stringify(prevSigmaData) ||
         columnsKey !== prevColumnsRef.current ||
         heatmapMetricLabel !== prevHeatmapMetricLabelRef.current ||
-        productLobLabel !== prevProductLobLabelRef.current)
+        productLobLabel !== prevProductLobLabelRef.current ||
+        searchHighlight !== prevSearchHighlightRef.current)
     ) {
       setPrevSigmaData(relevantData);
       prevColumnsRef.current = columnsKey;
       prevHeatmapMetricLabelRef.current = heatmapMetricLabel;
       prevProductLobLabelRef.current = productLobLabel;
+      prevSearchHighlightRef.current = searchHighlight;
 
       const graphDiv = document.getElementById('myDiv');
 
@@ -940,7 +993,8 @@ function App() {
         ...(choroplethTrace ? [choroplethTrace] : []),
         ...legendTraces,
         ...heatmapTraces,
-        dotTrace
+        dotTrace,
+        ...buildSearchHighlightTraces(searchHighlight)
       ];
       const heatmapTraceIndices = heatmapTraces.map(t => plotData.indexOf(t));
       const dotTraceIndex = plotData.indexOf(dotTrace);
@@ -1178,7 +1232,7 @@ function App() {
     // effect on its own the moment a newer tick lands, independently of
     // (and bypassing) the debounce.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [renderTrigger, heatmapMetricLabel, productLobLabel, setFilterZipcode, zctaByZip]);
+  }, [renderTrigger, heatmapMetricLabel, productLobLabel, setFilterZipcode, zctaByZip, searchHighlight]);
 
   // Zoom in/out via the underlying map (not Plotly.relayout) so the move
   // fires the same relayout event scroll/pinch zoom does -- that's what
@@ -1219,6 +1273,12 @@ function App() {
     });
     Plotly.restyle(graphDiv, { selectedpoints: graphDiv.data.map(() => null) });
     setFilterZipcode(null);
+
+    if (searchHighlightTimeoutRef.current) {
+      clearTimeout(searchHighlightTimeoutRef.current);
+      searchHighlightTimeoutRef.current = null;
+    }
+    setSearchHighlight(null);
   };
 
   // Looks a typed zip up in the full bundled zcta dataset (not just the
@@ -1240,7 +1300,22 @@ function App() {
     setZipSearchError(false);
     setZipSearchValue('');
     setZipSearchOpen(false);
+
+    if (searchHighlightTimeoutRef.current) {
+      clearTimeout(searchHighlightTimeoutRef.current);
+    }
+    setSearchHighlight({ zip: normZip, lat: entry.lat, lon: entry.lon });
+    searchHighlightTimeoutRef.current = setTimeout(() => {
+      setSearchHighlight(null);
+      searchHighlightTimeoutRef.current = null;
+    }, ZIP_SEARCH_HIGHLIGHT_MS);
   };
+
+  useEffect(() => {
+    return () => {
+      if (searchHighlightTimeoutRef.current) clearTimeout(searchHighlightTimeoutRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (zipSearchOpen && zipSearchInputRef.current) {
