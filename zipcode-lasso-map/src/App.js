@@ -170,8 +170,6 @@ const DEFAULT_DRAG_MODE = 'pan';
 // single zip and its immediate surroundings, regardless of how large or
 // small that particular zip's own shape is.
 const ZIP_SEARCH_ZOOM = 11.5;
-// How long the searched-for zip stays visibly highlighted after a jump.
-const ZIP_SEARCH_HIGHLIGHT_MS = 5000;
 
 // The heat map is one dot per zip, built from concentric soft-edged circles
 // rather than a kernel-density surface. Density fades every point from its
@@ -281,15 +279,18 @@ function ringsForZip(entry) {
 
 const ZIP_SEARCH_HIGHLIGHT_NAME = 'Zip search highlight';
 
-// A temporary "you searched for this one" marker: a soft glow behind a
-// solid center dot, labeled with the zip itself, at the searched zip's
-// centroid. Two traces rather than one because scattermap only supports a
-// single uniform marker size/color per trace -- the glow and the solid
-// center need different sizes to read as one ringed marker rather than a
-// single flat dot.
+// A "you searched for this one" marker: a soft glow behind a solid center
+// dot at the searched zip's centroid (the zip-code label itself is a plain
+// HTML overlay, not drawn here -- see searchHighlightLabelRef). Two traces
+// rather than one because scattermap only supports a single uniform
+// marker size/color per trace -- the glow and the solid center need
+// different sizes to read as one ringed marker rather than a single flat
+// dot. Deliberately blue -- the heat map's own palette runs green through
+// red, so anything in that range would risk blending in with a nearby hot
+// zip instead of standing out as a distinct "you are here" marker.
 function buildSearchHighlightTraces(highlight) {
   if (!highlight) return [];
-  const { zip, lat, lon } = highlight;
+  const { lat, lon } = highlight;
   return [
     {
       type: 'scattermap',
@@ -297,7 +298,7 @@ function buildSearchHighlightTraces(highlight) {
       lon: [lon],
       lat: [lat],
       mode: 'markers',
-      marker: { size: 34, color: 'rgba(255,23,68,0.35)' },
+      marker: { size: 40, color: 'rgba(41,98,255,0.35)' },
       hoverinfo: 'skip',
       showlegend: false
     },
@@ -306,15 +307,8 @@ function buildSearchHighlightTraces(highlight) {
       name: ZIP_SEARCH_HIGHLIGHT_NAME,
       lon: [lon],
       lat: [lat],
-      mode: 'markers+text',
-      marker: { size: 13, color: '#ff1744' },
-      text: [zip],
-      textposition: 'top center',
-      // No explicit font family: MapLibre's text/symbol layers can only use
-      // glyphs already baked into the basemap style's own font stack, and
-      // an arbitrary CSS family (e.g. "Arial Black") that isn't one of
-      // those silently renders nothing rather than falling back visibly.
-      textfont: { size: 13, color: '#b71c1c' },
+      mode: 'markers',
+      marker: { size: 15, color: '#2962ff' },
       hoverinfo: 'skip',
       showlegend: false
     }
@@ -449,12 +443,17 @@ function App() {
   const [zipSearchError, setZipSearchError] = useState(false);
   const zipSearchInputRef = useRef(null);
   const zipSearchWrapperRef = useRef(null);
-  // The zip a search last jumped to, drawn as a temporary highlight marker
-  // on top of the map until it times out (see ZIP_SEARCH_HIGHLIGHT_MS) or a
-  // new search replaces it. State, not a ref, so setting/clearing it is
-  // itself what triggers the redraw that adds/removes the marker.
+  // The zip a search last jumped to, drawn as a highlight marker on top of
+  // the map until a new search replaces it or Reset clears it. State, not a
+  // ref, so setting/clearing it is itself what triggers the redraw that
+  // adds/removes the marker.
   const [searchHighlight, setSearchHighlight] = useState(null);
-  const searchHighlightTimeoutRef = useRef(null);
+  // The HTML zip-code label's own position tracking. A ref mirror of
+  // searchHighlight (not just the state) because the map's 'move' listener
+  // below is attached once and needs to read whatever the latest highlight
+  // is on every pan/zoom tick, not just whatever it was when attached.
+  const searchHighlightRef = useRef(null);
+  const searchHighlightLabelRef = useRef(null);
   const lastSeenContentKeyRef = useRef(null);
   // Last-rendered heat percentile per zip, to damp exactly the kind of
   // widespread, barely-visible resizing that made the heat map read as
@@ -1243,6 +1242,57 @@ function App() {
     return subplot && subplot.map;
   };
 
+  // Repositions the HTML zip-code label over wherever its highlighted zip
+  // currently projects to on screen. map.project() is the underlying
+  // MapLibre instance's own lat/lon-to-pixel conversion -- reading it
+  // directly here, rather than trying to derive a position from Plotly's
+  // own layout, is what keeps the label glued to the right spot through an
+  // ordinary pan/zoom.
+  const repositionSearchHighlightLabel = () => {
+    const label = searchHighlightLabelRef.current;
+    if (!label) return;
+    const highlight = searchHighlightRef.current;
+    const map = getMap();
+    if (!highlight || !map) {
+      label.style.display = 'none';
+      return;
+    }
+    const { x, y } = map.project([highlight.lon, highlight.lat]);
+    label.style.display = 'block';
+    label.style.left = `${x}px`;
+    label.style.top = `${y}px`;
+  };
+
+  useEffect(() => {
+    searchHighlightRef.current = searchHighlight;
+    repositionSearchHighlightLabel();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchHighlight]);
+
+  // The map instance doesn't necessarily exist yet the moment this effect
+  // first runs (it's created asynchronously by the heavy render effect's
+  // own Plotly.react call), so this retries briefly rather than giving up
+  // after one failed attempt.
+  useEffect(() => {
+    let cancelled = false;
+    let map = null;
+    const tryAttach = () => {
+      if (cancelled) return;
+      map = getMap();
+      if (map) {
+        map.on('move', repositionSearchHighlightLabel);
+      } else {
+        setTimeout(tryAttach, 250);
+      }
+    };
+    tryAttach();
+    return () => {
+      cancelled = true;
+      if (map) map.off('move', repositionSearchHighlightLabel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const zoomBy = direction => {
     const map = getMap();
     if (!map) return;
@@ -1273,11 +1323,6 @@ function App() {
     });
     Plotly.restyle(graphDiv, { selectedpoints: graphDiv.data.map(() => null) });
     setFilterZipcode(null);
-
-    if (searchHighlightTimeoutRef.current) {
-      clearTimeout(searchHighlightTimeoutRef.current);
-      searchHighlightTimeoutRef.current = null;
-    }
     setSearchHighlight(null);
   };
 
@@ -1300,22 +1345,8 @@ function App() {
     setZipSearchError(false);
     setZipSearchValue('');
     setZipSearchOpen(false);
-
-    if (searchHighlightTimeoutRef.current) {
-      clearTimeout(searchHighlightTimeoutRef.current);
-    }
     setSearchHighlight({ zip: normZip, lat: entry.lat, lon: entry.lon });
-    searchHighlightTimeoutRef.current = setTimeout(() => {
-      setSearchHighlight(null);
-      searchHighlightTimeoutRef.current = null;
-    }, ZIP_SEARCH_HIGHLIGHT_MS);
   };
-
-  useEffect(() => {
-    return () => {
-      if (searchHighlightTimeoutRef.current) clearTimeout(searchHighlightTimeoutRef.current);
-    };
-  }, []);
 
   useEffect(() => {
     if (zipSearchOpen && zipSearchInputRef.current) {
@@ -1344,6 +1375,9 @@ function App() {
   return (
     <>
       <div id='myDiv'></div>
+      <div ref={searchHighlightLabelRef} className='zip-search-label'>
+        {searchHighlight ? searchHighlight.zip : ''}
+      </div>
       <div className='zoom-controls'>
         <div className='zip-search-wrapper' ref={zipSearchWrapperRef}>
           {zipSearchOpen && (

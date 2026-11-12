@@ -81,3 +81,21 @@ html, body, #root {
 .zip-search-flyout.error input::placeholder {
   color: #c0392b;
 }
+
+/* Positioned via direct style.left/top (see repositionSearchHighlightLabel
+   in App.js), not CSS -- position/display here are just the unset defaults
+   before the first position update. */
+.zip-search-label {
+  display: none;
+  position: fixed;
+  transform: translate(-50%, -160%);
+  background: rgba(255, 255, 255, 0.92);
+  color: #0039cb;
+  font: 700 13px/1 sans-serif;
+  padding: 3px 7px;
+  border-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
+  white-space: nowrap;
+  z-index: 5;
+}
